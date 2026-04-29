@@ -1,0 +1,4 @@
+# Разработка и проверки (pip install -r requirements-dev.txt)
+-r src/backend/requirements.txt
+pytest>=8,<9
+pytest-asyncio>=0.24,<1
