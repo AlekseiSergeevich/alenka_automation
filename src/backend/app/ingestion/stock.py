@@ -7,9 +7,9 @@ from sqlalchemy import and_, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.backend.app.ingestion.utils import extract_items, to_decimal
+from src.backend.app.ingestion.utils import to_decimal
 from src.backend.app.integrations.saby.client import SabyClient
-from src.backend.app.integrations.saby.schemas import ProductBalanceScema
+from src.backend.app.integrations.saby.schemas import ProductBalanceSchema, iter_nomenclature_dicts
 from src.backend.app.models import Product, StockCurrent
 
 logger = logging.getLogger(__name__)
@@ -43,13 +43,13 @@ async def sync_stock(
             page=page,
             page_size=_PAGE_SIZE,
         )
-        items = extract_items(raw)
+        items = iter_nomenclature_dicts(raw)
         if not items:
             break
 
         for item in items:
             try:
-                entry = ProductBalanceScema.model_validate(item)
+                entry = ProductBalanceSchema.model_validate(item)
             except ValidationError:
                 logger.warning(
                     "Skipping stock row with invalid payload for store %s: %s",

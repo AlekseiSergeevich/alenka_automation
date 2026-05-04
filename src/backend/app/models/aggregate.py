@@ -1,7 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Numeric, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Numeric, String, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.backend.app.db.base import Base
@@ -10,7 +12,7 @@ from src.backend.app.db.base import Base
 class AggStoreProduct(Base):
     """User-facing denormalized view per (store, product).
 
-    Refreshed from `sale_line` + `stock_current` after each ingestion run.
+    Refreshed from `sales_monthly`, `stock_current` и `sale_line` после ingestion.
     """
 
     __tablename__ = "agg_store_product"
@@ -18,6 +20,7 @@ class AggStoreProduct(Base):
         Index("ix_agg_store_product_store", "store_id"),
         Index("ix_agg_store_product_article", "article"),
         Index("ix_agg_store_product_days_of_cover", "days_of_cover"),
+        Index("ix_agg_store_product_sales_qty_3m", "sales_qty_3m"),
     )
 
     store_id: Mapped[int] = mapped_column(
@@ -36,9 +39,12 @@ class AggStoreProduct(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    sales_qty_30d: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, default=0)
-    sales_qty_90d: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, default=0)
-    sales_qty_window: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, default=0)
+    monthly_sales: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+    sales_qty_3m: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, default=0)
     avg_daily_qty: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=0)
     last_sale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     days_of_cover: Mapped[Decimal | None] = mapped_column(Numeric(18, 3), nullable=True)

@@ -6,9 +6,8 @@ from pydantic import ValidationError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.backend.app.ingestion.utils import extract_items
 from src.backend.app.integrations.saby.client import SabyClient
-from src.backend.app.integrations.saby.schemas import PointSchema
+from src.backend.app.integrations.saby.schemas import PointSchema, iter_sales_point_dicts
 from src.backend.app.models import Store
 
 logger = logging.getLogger(__name__)
@@ -26,7 +25,7 @@ async def sync_points(session: AsyncSession, client: SabyClient) -> int:
     page = 0
     while True:
         raw = await client.list_sales_points(page=page, page_size=_PAGE_SIZE)
-        items = extract_items(raw)
+        items = iter_sales_point_dicts(raw)
         if not items:
             break
 

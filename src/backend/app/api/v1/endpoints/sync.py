@@ -1,13 +1,47 @@
+from typing import Any
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
-from src.backend.app.api.deps import get_orchestrator
+from src.backend.app.api.deps import get_orchestrator, require_admin, require_user
+from src.backend.app.core.config import Settings, get_settings
 from src.backend.app.models import SyncEntity
-from src.backend.app.services import SyncOrchestrator, TriggerMode
+from src.backend.app.services import FreshnessInfo, SyncOrchestrator, TriggerMode
 
 router = APIRouter()
 
 
-@router.post("/sync/{entity}", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/sync/bootstrap",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_admin)],
+)
+async def bootstrap_sync(
+    mode: TriggerMode = Query(
+        default=TriggerMode.force,
+        description="Сейчас поддерживается только force (синхронное выполнение).",
+    ),
+    orchestrator: SyncOrchestrator = Depends(get_orchestrator),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Точки → для каждой точки склад и продажи (помесячно за N месяцев)."""
+
+    if mode != TriggerMode.force:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="bootstrap-sync currently requires mode=force",
+        )
+
+    summary = await orchestrator.bootstrap_all_sync()
+    summary["months_back"] = settings.sales_months_back
+    summary["detail"] = "Bootstrap completed."
+    return summary
+
+
+@router.post(
+    "/sync/{entity}",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_admin)],
+)
 async def trigger_sync(
     entity: SyncEntity,
     background_tasks: BackgroundTasks,
@@ -43,28 +77,46 @@ async def trigger_sync(
     }
 
 
-@router.get("/sync/status")
+@router.get("/sync/status", dependencies=[Depends(require_user)])
 async def sync_status(
     orchestrator: SyncOrchestrator = Depends(get_orchestrator),
-) -> list[dict[str, object]]:
+    settings: Settings = Depends(get_settings),
+) -> list[dict[str, Any]]:
     """Return freshness for points + stock/sales for every known store."""
 
-    infos = []
-    for entity in (SyncEntity.points,):
-        info = await orchestrator.freshness(entity, None)
-        infos.append(_freshness_to_dict(info))
-    for sid in await orchestrator._known_store_ids():  # noqa: SLF001 (admin readout)
+    infos: list[dict[str, Any]] = []
+
+    pinfo = await orchestrator.freshness(SyncEntity.points, None)
+    infos.append(
+        _freshness_to_dict(
+            pinfo,
+            extra={"sales_months_back": settings.sales_months_back},
+        )
+    )
+
+    for sid in await orchestrator.known_store_ids():
         for entity in (SyncEntity.stock, SyncEntity.sales):
             info = await orchestrator.freshness(entity, sid)
-            infos.append(_freshness_to_dict(info))
+            extra: dict[str, Any] = {"sales_months_back": settings.sales_months_back}
+            if entity == SyncEntity.sales:
+                extra["month_coverage"] = await orchestrator.sales_month_coverage(sid)
+            infos.append(_freshness_to_dict(info, extra=extra))
+
     return infos
 
 
-def _freshness_to_dict(info) -> dict[str, object]:
-    return {
+def _freshness_to_dict(
+    info: FreshnessInfo,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "entity": info.entity.value,
         "store_id": info.store_id,
         "last_finished_at": info.last_finished_at,
         "stale": info.stale,
         "ttl_seconds": info.ttl_seconds,
     }
+    if extra:
+        payload.update(extra)
+    return payload

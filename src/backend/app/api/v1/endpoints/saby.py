@@ -1,18 +1,19 @@
-from datetime import datetime
+from datetime import date, datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 
+from src.backend.app.api.deps import get_saby_client, require_admin
 from src.backend.app.core.config import Settings, get_settings
 from src.backend.app.integrations.saby.client import SabyClient
-from src.backend.app.integrations.saby.schemas import SabyConnectionStatus
+from src.backend.app.integrations.saby.schemas import (
+    NomenclatureListResponse,
+    SalesPointsResponse,
+    SabyConnectionStatus,
+)
 
 
-router = APIRouter()
-
-
-def get_saby_client(settings: Settings = Depends(get_settings)) -> SabyClient:
-    return SabyClient(settings=settings)
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 @router.get("/status", response_model=SabyConnectionStatus)
@@ -28,14 +29,15 @@ async def saby_connection_status(
     )
 
 
-@router.get("/sales-points")
+@router.get("/sales-points", response_model=SalesPointsResponse)
 async def list_sales_points(
     product: str = Query(default="retail", description="Saby product: retail or delivery."),
     page: int = Query(default=0, ge=0),
     page_size: int = Query(default=100, ge=1, le=500),
     client: SabyClient = Depends(get_saby_client),
-) -> dict[str, Any]:
-    return await client.list_sales_points(product=product, page=page, page_size=page_size)
+) -> SalesPointsResponse:
+    payload = await client.list_sales_points(product=product, page=page, page_size=page_size)
+    return SalesPointsResponse.model_validate(payload)
 
 
 @router.get(
@@ -92,11 +94,11 @@ async def list_products(
     ),
     order: Literal["before", "after"] | None = Query(
         default=None,
-        description="Для курсовой навигации вместе с position: назад или вперёд.",
+        description="Для курсовой навигации вместе с position: before или after.",
     ),
     client: SabyClient = Depends(get_saby_client),
-) -> dict[str, Any]:
-    return await client.list_products(
+) -> NomenclatureListResponse:
+    payload = await client.list_products(
         point_id=point_id,
         price_list_id=price_list_id,
         no_stop_list=no_stop_list,
@@ -108,6 +110,7 @@ async def list_products(
         position=position,
         order=order,
     )
+    return NomenclatureListResponse.model_validate(payload)
 
 
 @router.get("/balances")
@@ -143,15 +146,21 @@ async def list_sales(
         page_size=page_size,
     )
 
+
 @router.get("/price-list")
 async def list_price_list(
     pointId: int = Query(default=0, alias="pointId"),
-    actualDate: datetime = Query(default=datetime.now().date(), alias="actualDate"),
+    actualDate: date | None = Query(default=None, alias="actualDate"),
     page: int = Query(default=0, ge=0),
     pageSize: int = Query(default=100, ge=1, le=1000),
     client: SabyClient = Depends(get_saby_client),
 ) -> dict[str, Any]:
-    return await client.price_list(pointId=pointId, actualDate=actualDate, page=page, pageSize=pageSize)
+    ad = actualDate or date.today()
+    actual_dt = datetime(ad.year, ad.month, ad.day, tzinfo=timezone.utc)
+    return await client.price_list(
+        pointId=pointId, actualDate=actual_dt, page=page, pageSize=pageSize
+    )
+
 
 @router.get("/warehouses")
 async def list_warehouses(

@@ -29,7 +29,7 @@ def _build_engine(settings: Settings) -> AsyncEngine:
 
 @lru_cache
 def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker   (
+    return async_sessionmaker(
         bind=get_engine(),
         expire_on_commit=False,
         autoflush=False,

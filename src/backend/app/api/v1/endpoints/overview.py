@@ -1,18 +1,46 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.backend.app.api.deps import get_orchestrator
+from src.backend.app.api.deps import get_orchestrator, require_user
 from src.backend.app.db.session import get_session
 from src.backend.app.models import AggStoreProduct, Store
 from src.backend.app.services import SyncOrchestrator
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
+
+
+class MonthlySalesBucket(BaseModel):
+    month: date
+    qty: Decimal
+    orders_count: int = 0
+
+    model_config = ConfigDict(extra="ignore")
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, v: Decimal | float | int | str) -> Decimal:
+        if isinstance(v, Decimal):
+            return v
+        return Decimal(str(v))
+
+    @field_validator("month", mode="before")
+    @classmethod
+    def _parse_month(cls, v: date | datetime | str) -> date:
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        if isinstance(v, str):
+            head = v[:10].strip()
+            y, mo, d = head.split("-", 2)
+            return date(int(y), int(mo), int(d))
+        raise TypeError("month field must be a date-compatible value")
 
 
 class AggRow(BaseModel):
@@ -23,15 +51,41 @@ class AggRow(BaseModel):
     unit: str
     stock_balance: Decimal
     stock_captured_at: datetime | None = None
-    sales_qty_30d: Decimal
-    sales_qty_90d: Decimal
-    sales_qty_window: Decimal
+    monthly_sales: list[MonthlySalesBucket]
+    sales_qty_3m: Decimal
     avg_daily_qty: Decimal
     last_sale_at: datetime | None = None
     days_of_cover: Decimal | None = None
     refreshed_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=False)
+
+    @classmethod
+    def from_agg(cls, row: AggStoreProduct) -> AggRow:
+        raw_monthly = getattr(row, "monthly_sales", None) or []
+        buckets = [MonthlySalesBucket.model_validate(item) for item in raw_monthly]
+
+        store_id = int(getattr(row, "store_id"))
+        article = str(getattr(row, "article"))
+        return cls(
+            store_id=store_id,
+            article=article,
+            store_name=str(getattr(row, "store_name", "") or ""),
+            product_name=str(getattr(row, "product_name", "") or ""),
+            unit=str(getattr(row, "unit", "") or ""),
+            stock_balance=Decimal(getattr(row, "stock_balance", 0)),
+            stock_captured_at=getattr(row, "stock_captured_at", None),
+            monthly_sales=buckets,
+            sales_qty_3m=Decimal(getattr(row, "sales_qty_3m", 0)),
+            avg_daily_qty=Decimal(getattr(row, "avg_daily_qty", 0)),
+            last_sale_at=getattr(row, "last_sale_at", None),
+            days_of_cover=(
+                Decimal(getattr(row, "days_of_cover"))
+                if getattr(row, "days_of_cover", None) is not None
+                else None
+            ),
+            refreshed_at=getattr(row, "refreshed_at"),
+        )
 
 
 class OverviewMeta(BaseModel):
@@ -52,9 +106,7 @@ SortField = Literal[
     "article",
     "product_name",
     "stock_balance",
-    "sales_qty_30d",
-    "sales_qty_90d",
-    "sales_qty_window",
+    "sales_qty_3m",
     "avg_daily_qty",
     "days_of_cover",
     "last_sale_at",
@@ -66,9 +118,7 @@ _SORT_COLUMNS = {
     "article": AggStoreProduct.article,
     "product_name": AggStoreProduct.product_name,
     "stock_balance": AggStoreProduct.stock_balance,
-    "sales_qty_30d": AggStoreProduct.sales_qty_30d,
-    "sales_qty_90d": AggStoreProduct.sales_qty_90d,
-    "sales_qty_window": AggStoreProduct.sales_qty_window,
+    "sales_qty_3m": AggStoreProduct.sales_qty_3m,
     "avg_daily_qty": AggStoreProduct.avg_daily_qty,
     "days_of_cover": AggStoreProduct.days_of_cover,
     "last_sale_at": AggStoreProduct.last_sale_at,
@@ -89,12 +139,7 @@ async def get_overview(
     session: AsyncSession = Depends(get_session),
     orchestrator: SyncOrchestrator = Depends(get_orchestrator),
 ) -> OverviewResponse:
-    """Main user-facing table: store x product with stock + sales rollups.
-
-    Triggers a background refresh of stale entities for all known stores but
-    always serves the currently persisted snapshot. When nothing is persisted
-    yet, the response is empty and `meta.stale=true`.
-    """
+    """Основная таблица: магазин × товар, остатки и продажи по месяцам."""
 
     freshness = await orchestrator.ensure_overview_fresh(background_tasks)
     stale = any(info.stale for info in freshness)
@@ -140,7 +185,7 @@ async def get_overview(
                 else None
             ),
         ),
-        items=[AggRow.model_validate(row) for row in rows],
+        items=[AggRow.from_agg(row) for row in rows],
     )
 
 
@@ -214,7 +259,7 @@ async def list_store_products(
                 else None
             ),
         ),
-        items=[AggRow.model_validate(row) for row in rows],
+        items=[AggRow.from_agg(row) for row in rows],
     )
 
 
@@ -254,12 +299,11 @@ async def product_across_stores(
                 else None
             ),
         ),
-        items=[AggRow.model_validate(row) for row in rows],
+        items=[AggRow.from_agg(row) for row in rows],
     )
 
 
 def _entity(name: str):
-    # Imported lazily to avoid module-level coupling for a single function.
     from src.backend.app.models import SyncEntity
 
     return SyncEntity(name)
