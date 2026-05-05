@@ -9,6 +9,8 @@ from src.backend.app.ingestion.month_ranges import (
     utc_calendar_month_slices,
 )
 from src.backend.app.integrations.saby.schemas import (
+    OrderLinePayload,
+    ProductBalanceSchema,
     RetailOrderPayload,
     iter_nomenclature_dicts,
     iter_order_dicts,
@@ -44,6 +46,40 @@ def test_iter_nomenclatures_prefers_key() -> None:
 def test_retail_order_payload_reads_datetime_alias() -> None:
     payload = RetailOrderPayload.model_validate({"datetime": "2026-03-02", "lines": [{}]})
     assert payload.order_lines_raw() == [{}]
+
+
+def test_product_balance_fallbacks_nom_number() -> None:
+    row = ProductBalanceSchema.model_validate(
+        {"article": None, "balance": None, "nomNumber": "X4596954"}
+    )
+    assert row.article == "X4596954"
+    assert row.balance == ""
+    assert row.nom_number == "X4596954"
+
+
+def test_product_balance_keeps_vendor_article_and_nom() -> None:
+    row = ProductBalanceSchema.model_validate(
+        {"article": "СР12667", "nomNumber": "X4924446", "balance": "1.5"}
+    )
+    assert row.article == "СР12667"
+    assert row.nom_number == "X4924446"
+    assert row.balance == "1.5"
+
+
+def test_retail_prefers_sale_nomenclatures_over_lines_empty() -> None:
+    payload = RetailOrderPayload.model_validate(
+        {
+            "lines": [],
+            "SaleNomenclatures": [
+                {"NomenclatureNumber": "Z1", "Quantity": 1.25, "Name": "Candy"}
+            ],
+        }
+    )
+    raw = payload.order_lines_raw()
+    assert len(raw) == 1
+    line = OrderLinePayload.model_validate(raw[0])
+    assert line.article == "Z1"
+    assert line.count == 1.25
 
 
 def test_month_starts_dates() -> None:

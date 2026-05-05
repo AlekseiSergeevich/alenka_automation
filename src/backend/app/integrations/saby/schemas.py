@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, AliasChoices, ConfigDict, Field, field_validator, model_validator
 
 
 class SabyConnectionStatus(BaseModel):
@@ -96,12 +96,57 @@ class PriceListSchema(BaseModel):
 
 
 class ProductBalanceSchema(BaseModel):
+    """Номенклатура склада точки из Retail v2."""
+
+    #: Артикул из карточки (если заполнен в Saby / 1С); иначе — fallback ниже.
     article: str = ""
+    #: Внутренний ``nomNumber`` Saby (`X4924446`), совпадает с ``NomenclatureNumber`` в чеках.
+    nom_number: str = ""
     balance: str = ""
     name: str = ""
     unit: str = ""
 
     model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fallback_article_balance(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        nn = ""
+        for k in ("nomNumber", "NomenclatureNumber", "nomenclatureNumber"):
+            raw = d.get(k)
+            if raw is None:
+                continue
+            s = str(raw).strip()
+            if s:
+                nn = s
+                break
+        d["nom_number"] = nn
+
+        art = d.get("article")
+        if art is None or str(art).strip() == "":
+            for k in ("nomNumber", "NomenclatureNumber", "nomenclatureNumber", "short_code"):
+                raw = d.get(k)
+                if raw is None:
+                    continue
+                s = str(raw).strip()
+                if s:
+                    d["article"] = s
+                    break
+
+        bal = d.get("balance")
+        if bal is None:
+            d["balance"] = ""
+        elif not isinstance(bal, str):
+            d["balance"] = str(bal)
+
+        if d.get("article") is None:
+            d["article"] = ""
+        if d.get("nom_number") is None:
+            d["nom_number"] = ""
+        return d
 
 
 class NomenclatureListResponse(BaseModel):
@@ -143,7 +188,39 @@ class OrderLinePayload(BaseModel):
     unit: str | None = ""
     count: Any = None
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_sale_line_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("article") and not d.get("Article"):
+            for k in (
+                "NomenclatureNumber",
+                "nomenclatureNumber",
+                "nomNumber",
+                "NomNumber",
+            ):
+                raw = d.get(k)
+                if raw is None:
+                    continue
+                s = str(raw).strip()
+                if s:
+                    d["article"] = s
+                    break
+        if d.get("name") in (None, "") and d.get("Name") is not None:
+            d["name"] = d.get("Name")
+        if not d.get("unit") and (d.get("UnitName") is not None or d.get("Unit") is not None):
+            u = d.get("UnitName") if d.get("UnitName") is not None else d.get("Unit")
+            if u is not None:
+                d["unit"] = str(u)
+        if d.get("count") is None and d.get("Count") is None:
+            q = d.get("Quantity")
+            if q is not None:
+                d["count"] = q
+        return d
 
     @field_validator("article", mode="before")
     @classmethod
@@ -157,6 +234,12 @@ class RetailOrderPayload(BaseModel):
     """Один заказ из /retail/order/list."""
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    sale_nomenclatures: list[dict[str, Any]] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SaleNomenclatures", "saleNomenclatures"),
+        description="Позиции чека из ответа Saby Retail (частый формат заказов).",
+    )
 
     id: int | str | None = None
     orderId: int | str | None = Field(default=None, alias="orderId")
@@ -180,6 +263,10 @@ class RetailOrderPayload(BaseModel):
     created_at: str | datetime | None = None
 
     def order_lines_raw(self) -> list[dict[str, Any]]:
+        if isinstance(self.sale_nomenclatures, list):
+            rows = [x for x in self.sale_nomenclatures if isinstance(x, dict)]
+            if rows:
+                return rows
         for key in ("nomenclatures", "items", "positions", "lines", "products"):
             v = getattr(self, key, None)
             if isinstance(v, list):

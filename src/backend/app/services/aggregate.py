@@ -33,7 +33,10 @@ WITH sales_monthly_buckets AS (
     FROM sales_monthly sm
     WHERE sm.month_start >= :first_month
       AND sm.month_start <= :last_month
-      AND (:sales_store_id IS NULL OR sm.store_id = :sales_store_id)
+      AND (
+          CAST(:sales_store_id AS BIGINT) IS NULL
+          OR sm.store_id = CAST(:sales_store_id AS BIGINT)
+      )
     GROUP BY sm.store_id, sm.article
 ),
 last_sales AS (
@@ -41,12 +44,18 @@ last_sales AS (
     FROM sale_line sl
     WHERE sl.sold_at >= :overall_from
       AND sl.sold_at < :overall_to_exclusive
-      AND (:sales_store_id IS NULL OR sl.store_id = :sales_store_id)
+      AND (
+          CAST(:sales_store_id AS BIGINT) IS NULL
+          OR sl.store_id = CAST(:sales_store_id AS BIGINT)
+      )
     GROUP BY sl.store_id, sl.article
 ),
 scope AS (
     SELECT store_id, article FROM stock_current sc
-    WHERE (:sales_store_id IS NULL OR sc.store_id = :sales_store_id)
+    WHERE (
+        CAST(:sales_store_id AS BIGINT) IS NULL
+        OR sc.store_id = CAST(:sales_store_id AS BIGINT)
+    )
     UNION
     SELECT store_id, article FROM sales_monthly_buckets
     UNION
@@ -110,7 +119,10 @@ ON CONFLICT (store_id, article) DO UPDATE SET
 
 _CLEANUP_AGG_SQL = """
 DELETE FROM agg_store_product agg
-WHERE (:sales_store_id IS NULL OR agg.store_id = :sales_store_id)
+WHERE (
+      CAST(:sales_store_id AS BIGINT) IS NULL
+      OR agg.store_id = CAST(:sales_store_id AS BIGINT)
+)
   AND NOT EXISTS (
       SELECT 1 FROM stock_current sc
       WHERE sc.store_id = agg.store_id AND sc.article = agg.article

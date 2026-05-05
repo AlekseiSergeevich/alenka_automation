@@ -1,14 +1,16 @@
 import logging
+from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import delete
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy import text as sql_text
-from sqlalchemy import and_, insert
+from sqlalchemy import and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.backend.app.ingestion.identifiers import is_sbis_internal_nom_code
 from src.backend.app.ingestion.month_ranges import MonthSlice, month_starts_from_slices
 from src.backend.app.ingestion.utils import to_decimal
 from src.backend.app.integrations.saby.client import SabyClient
@@ -22,6 +24,36 @@ from src.backend.app.models import Product, SaleLine, SalesMonthly
 logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 200
+
+
+async def _build_nom_number_resolver(session: AsyncSession) -> dict[str, str]:
+    """Сырой ``NomenclatureNumber`` из чека → ключ ``product.article`` после загрузки складов."""
+
+    rows = (
+        await session.execute(
+            select(Product.nom_number, Product.article).where(
+                Product.nom_number.isnot(None),
+                Product.nom_number != "",
+            )
+        )
+    ).all()
+
+    bucket: defaultdict[str, set[str]] = defaultdict(set)
+    for nom, art in rows:
+        bucket[str(nom).strip()].add(str(art).strip())
+
+    out: dict[str, str] = {}
+    for nom, arts in bucket.items():
+        arts = {a for a in arts if a}
+        if not arts:
+            continue
+        if len(arts) == 1:
+            out[nom] = next(iter(arts))
+            continue
+        # при дубликатах (старый ключ X… и «правильный» артикул) предпочитаем не‑X
+        ordered = sorted(arts, key=lambda a: (is_sbis_internal_nom_code(a), len(a)))
+        out[nom] = ordered[0]
+    return out
 
 
 async def refresh_sales_monthly_for_store(
@@ -139,6 +171,7 @@ async def _sync_sales_window(
     if to_datetime <= from_datetime:
         raise ValueError("to_datetime must be strictly greater than from_datetime")
 
+    resolver = await _build_nom_number_resolver(session)
     product_rows: dict[str, dict[str, Any]] = {}
     sale_rows: list[dict[str, Any]] = []
 
@@ -169,9 +202,10 @@ async def _sync_sales_window(
             order_id = _stringify(ord_payload.id or ord_payload.orderId or ord_payload.uuid)
             lines = _validated_lines_from_payload(ord_payload)
             for line_no, line in enumerate(lines, start=1):
-                article = line.article
-                if not article:
+                raw_key = (line.article or "").strip()
+                if not raw_key:
                     continue
+                article = resolver.get(raw_key, raw_key)
                 name = line.name or ""
                 unit_val = line.unit or ""
                 qty = to_decimal(line.count)
@@ -182,6 +216,7 @@ async def _sync_sales_window(
                         "name": name,
                         "unit": unit_val,
                         "updated_at": shared_now,
+                        "nom_number": None,
                     },
                 )
                 sale_rows.append(
@@ -208,6 +243,7 @@ async def _sync_sales_window(
                 "name": stmt.excluded.name,
                 "unit": stmt.excluded.unit,
                 "updated_at": shared_now,
+                "nom_number": func.coalesce(Product.nom_number, stmt.excluded.nom_number),
             },
         )
         await session.execute(stmt)
