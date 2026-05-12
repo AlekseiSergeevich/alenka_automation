@@ -10,6 +10,9 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { authApi } from "@/api/auth";
 import type { UserDto } from "@/api/types";
+import { isAuthUiDisabled } from "@/lib/authUi";
+
+const DEV_USER: UserDto = { username: "dev", role: "admin" };
 
 interface AuthContextValue {
   user: UserDto | null;
@@ -22,10 +25,20 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const [user, setUserState] = useState<UserDto | null>(null);
-  const [status, setStatus] = useState<AuthContextValue["status"]>("loading");
+  const bypass = isAuthUiDisabled();
+  const [user, setUserState] = useState<UserDto | null>(() =>
+    bypass ? DEV_USER : null,
+  );
+  const [status, setStatus] = useState<AuthContextValue["status"]>(() =>
+    bypass ? "authenticated" : "loading",
+  );
 
   const refresh = useCallback(async () => {
+    if (isAuthUiDisabled()) {
+      setUserState(DEV_USER);
+      setStatus("authenticated");
+      return;
+    }
     try {
       const me = await authApi.fetchCurrentUser();
       setUserState(me);

@@ -13,6 +13,7 @@ from src.backend.app.api.deps import get_orchestrator, require_user
 from src.backend.app.db.session import get_session
 from src.backend.app.models import AggStoreProduct, Store
 from src.backend.app.services import SyncOrchestrator
+from src.backend.app.services.order_blank_catalog import compute_order_blank_reminder_state
 
 router = APIRouter(dependencies=[Depends(require_user)])
 
@@ -96,6 +97,11 @@ class OverviewMeta(BaseModel):
     offset: int
     stale: bool
     warning: str | None = None
+    #: Пустой каталог или не загружен бланок в текущем месяце.
+    needs_order_blank: bool = False
+    catalog_empty: bool = False
+    needs_monthly_upload: bool = False
+    last_order_blank_applied_at: datetime | None = None
 
 
 class OverviewResponse(BaseModel):
@@ -113,6 +119,35 @@ SortField = Literal[
     "days_of_cover",
     "last_sale_at",
 ]
+
+
+_STALE_BG_WARNING = (
+    "Данные обновляются в фоне — обновите страницу через минуту, "
+    "чтобы получить актуальные значения."
+)
+_EMPTY_CATALOG_WARNING = (
+    "Справочник товаров пуст; загрузите бланк заказа (.xls), чтобы включить "
+    "синхронизацию остатков и продаж."
+)
+_MONTHLY_UPLOAD_WARNING = (
+    "В текущем месяце ещё не загружен актуальный бланк заказа (.xls). "
+    "Загрузите файл, чтобы обновить каталог."
+)
+
+
+def _overview_warning_meta(
+    *,
+    stale: bool,
+    catalog_empty: bool,
+    needs_monthly_upload: bool,
+) -> str | None:
+    if stale:
+        return _STALE_BG_WARNING
+    if catalog_empty:
+        return _EMPTY_CATALOG_WARNING
+    if needs_monthly_upload:
+        return _MONTHLY_UPLOAD_WARNING
+    return None
 
 
 _SORT_COLUMNS = {
@@ -141,8 +176,14 @@ async def get_overview(
     session: AsyncSession = Depends(get_session),
     orchestrator: SyncOrchestrator = Depends(get_orchestrator),
 ) -> OverviewResponse:
-    """Основная таблица: магазин × товар, остатки и продажи по месяцам."""
+    """Основная таблица: магазин × товар, остатки и продажи по месяцам.
 
+    Lazy refresh: при непустом каталоге ``product`` и устаревших TTL вызывается
+    ``ensure_overview_fresh`` — фоновые задачи подтягивают точки/склад/продажи
+    в catalog-safe режиме (без расширения справочника товаров из Saby).
+    """
+
+    hint = await compute_order_blank_reminder_state(session)
     freshness = await orchestrator.ensure_overview_fresh(background_tasks)
     stale = any(info.stale for info in freshness)
 
@@ -175,17 +216,24 @@ async def get_overview(
 
     rows = (await session.execute(query)).scalars().all()
 
+    warn = _overview_warning_meta(
+        stale=stale,
+        catalog_empty=hint.catalog_empty,
+        needs_monthly_upload=hint.needs_monthly_upload,
+    )
+    needs_attention = hint.needs_order_blank_attention
+
     return OverviewResponse(
         meta=OverviewMeta(
             total=int(total),
             limit=limit,
             offset=offset,
             stale=stale,
-            warning=(
-                "Data is being refreshed in the background; retry shortly for fresh values."
-                if stale
-                else None
-            ),
+            needs_order_blank=needs_attention,
+            catalog_empty=hint.catalog_empty,
+            needs_monthly_upload=hint.needs_monthly_upload,
+            last_order_blank_applied_at=hint.last_success_applied_at,
+            warning=warn,
         ),
         items=[AggRow.from_agg(row) for row in rows],
     )
@@ -227,13 +275,16 @@ async def list_store_products(
             status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
         )
 
-    stock_info = await orchestrator.ensure_fresh(
-        entity=_entity("stock"), store_id=store_id, background_tasks=background_tasks
-    )
-    sales_info = await orchestrator.ensure_fresh(
-        entity=_entity("sales"), store_id=store_id, background_tasks=background_tasks
-    )
+    async with orchestrator.catalog_safe_overview_context():
+        stock_info = await orchestrator.ensure_fresh(
+            entity=_entity("stock"), store_id=store_id, background_tasks=background_tasks
+        )
+        sales_info = await orchestrator.ensure_fresh(
+            entity=_entity("sales"), store_id=store_id, background_tasks=background_tasks
+        )
     stale = stock_info.stale or sales_info.stale
+
+    hint = await compute_order_blank_reminder_state(session)
 
     query = select(AggStoreProduct).where(AggStoreProduct.store_id == store_id)
     total = await session.scalar(
@@ -249,17 +300,23 @@ async def list_store_products(
         )
     ).scalars().all()
 
+    warn = _overview_warning_meta(
+        stale=stale,
+        catalog_empty=hint.catalog_empty,
+        needs_monthly_upload=hint.needs_monthly_upload,
+    )
+
     return OverviewResponse(
         meta=OverviewMeta(
             total=int(total),
             limit=limit,
             offset=offset,
             stale=stale,
-            warning=(
-                "Data is being refreshed in the background; retry shortly for fresh values."
-                if stale
-                else None
-            ),
+            warning=warn,
+            needs_order_blank=hint.needs_order_blank_attention,
+            catalog_empty=hint.catalog_empty,
+            needs_monthly_upload=hint.needs_monthly_upload,
+            last_order_blank_applied_at=hint.last_success_applied_at,
         ),
         items=[AggRow.from_agg(row) for row in rows],
     )
@@ -276,8 +333,11 @@ async def product_across_stores(
 ) -> OverviewResponse:
     """Cross-store view of a single article."""
 
-    freshness = await orchestrator.ensure_overview_fresh(background_tasks)
+    async with orchestrator.catalog_safe_overview_context():
+        freshness = await orchestrator.ensure_overview_fresh(background_tasks)
     stale = any(info.stale for info in freshness)
+
+    hint = await compute_order_blank_reminder_state(session)
 
     query = select(AggStoreProduct).where(AggStoreProduct.article == article)
     total = await session.scalar(
@@ -289,17 +349,23 @@ async def product_across_stores(
         )
     ).scalars().all()
 
+    warn = _overview_warning_meta(
+        stale=stale,
+        catalog_empty=hint.catalog_empty,
+        needs_monthly_upload=hint.needs_monthly_upload,
+    )
+
     return OverviewResponse(
         meta=OverviewMeta(
             total=int(total),
             limit=limit,
             offset=offset,
             stale=stale,
-            warning=(
-                "Data is being refreshed in the background; retry shortly for fresh values."
-                if stale
-                else None
-            ),
+            warning=warn,
+            needs_order_blank=hint.needs_order_blank_attention,
+            catalog_empty=hint.catalog_empty,
+            needs_monthly_upload=hint.needs_monthly_upload,
+            last_order_blank_applied_at=hint.last_success_applied_at,
         ),
         items=[AggRow.from_agg(row) for row in rows],
     )

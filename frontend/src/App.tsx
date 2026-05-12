@@ -5,6 +5,7 @@ import { LoginPage } from "@/pages/LoginPage";
 import { StoresPage } from "@/pages/StoresPage";
 import { StorePage } from "@/pages/StorePage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
+import { OrderBlankPage } from "@/pages/OrderBlankPage";
 
 export function App() {
   return (
@@ -20,6 +21,7 @@ export function App() {
         <Route index element={<Navigate to="/stores" replace />} />
         <Route path="stores" element={<StoresPage />} />
         <Route path="stores/:storeId" element={<StorePage />} />
+        <Route path="order-blank" element={<OrderBlankPage />} />
       </Route>
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

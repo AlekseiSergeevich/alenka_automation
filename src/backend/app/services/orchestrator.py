@@ -3,7 +3,10 @@ from __future__ import annotations
 import enum
 import logging
 import zlib
+from contextlib import asynccontextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from typing import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -18,12 +21,19 @@ from src.backend.app.ingestion.month_ranges import (
     month_starts_from_slices,
     utc_calendar_month_slices,
 )
-from src.backend.app.ingestion import sync_points, sync_sales, sync_stock
+from src.backend.app.ingestion.points import sync_points
+from src.backend.app.ingestion.sales import sync_sales
+from src.backend.app.ingestion.stock import sync_stock, sync_stock_for_existing_products
 from src.backend.app.integrations.saby.client import SabyClient
-from src.backend.app.models import SalesMonthly, Store, SyncEntity, SyncRun, SyncStatus
+from src.backend.app.models import Product, SalesMonthly, Store, SyncEntity, SyncRun, SyncStatus
 from src.backend.app.services.aggregate import refresh_aggregate
 
 logger = logging.getLogger(__name__)
+
+catalog_safe_ingestion: ContextVar[bool] = ContextVar(
+    "catalog_safe_ingestion",
+    default=False,
+)
 
 
 class TriggerMode(str, enum.Enum):
@@ -112,18 +122,32 @@ class SyncOrchestrator:
     ) -> list[FreshnessInfo]:
         """Convenience: triggers points + stock + sales for all known stores."""
 
+        async with self._session_factory() as session:
+            product_count = await session.scalar(select(func.count()).select_from(Product))
+        product_count = int(product_count or 0)
+
         infos: list[FreshnessInfo] = []
         infos.append(await self.ensure_fresh(SyncEntity.points, None, background_tasks))
 
-        store_ids = await self._known_store_ids()
-        for sid in store_ids:
-            infos.append(
-                await self.ensure_fresh(SyncEntity.stock, sid, background_tasks)
-            )
-            infos.append(
-                await self.ensure_fresh(SyncEntity.sales, sid, background_tasks)
-            )
-        return infos
+        if product_count == 0:
+            return infos
+
+        token: Token | None = None
+        if self._settings.overview_triggers_catalog_safe_ingestion:
+            token = catalog_safe_ingestion.set(True)
+        try:
+            store_ids = await self._known_store_ids()
+            for sid in store_ids:
+                infos.append(
+                    await self.ensure_fresh(SyncEntity.stock, sid, background_tasks)
+                )
+                infos.append(
+                    await self.ensure_fresh(SyncEntity.sales, sid, background_tasks)
+                )
+            return infos
+        finally:
+            if token is not None:
+                catalog_safe_ingestion.reset(token)
 
     async def run(self, entity: SyncEntity, store_id: int | None = None) -> SyncRun:
         """Run ingestion synchronously with advisory lock + aggregate refresh."""
@@ -134,6 +158,21 @@ class SyncOrchestrator:
         """Известные из БД идентификаторы точек (магазинов)."""
 
         return await self._known_store_ids()
+
+    @asynccontextmanager
+    async def catalog_safe_overview_context(self) -> AsyncIterator[None]:
+        """Включает catalog-safe ingestion для stock/sales, если в ``product`` уже есть строки."""
+
+        async with self._session_factory() as session:
+            n = await session.scalar(select(func.count()).select_from(Product))
+        if int(n or 0) == 0 or not self._settings.overview_triggers_catalog_safe_ingestion:
+            yield
+            return
+        token = catalog_safe_ingestion.set(True)
+        try:
+            yield
+        finally:
+            catalog_safe_ingestion.reset(token)
 
     async def bootstrap_all_sync(self) -> dict[str, Any]:
         """Полная первичная загрузка: точки затем для каждой точки склад и продажи.
@@ -271,7 +310,12 @@ class SyncOrchestrator:
             raise ValueError(f"{entity.value} sync requires store_id")
 
         if entity == SyncEntity.stock:
-            rows = await sync_stock(session, self._client, store_id)
+            if catalog_safe_ingestion.get():
+                rows = await sync_stock_for_existing_products(
+                    session, self._client, store_id
+                )
+            else:
+                rows = await sync_stock(session, self._client, store_id)
             return rows, None, None
 
         if entity == SyncEntity.sales:
@@ -279,7 +323,16 @@ class SyncOrchestrator:
                 self._settings.sales_months_back,
                 datetime.now(timezone.utc),
             )
-            rows = await sync_sales(session, self._client, store_id, slices)
+            if catalog_safe_ingestion.get():
+                rows = await sync_sales(
+                    session,
+                    self._client,
+                    store_id,
+                    slices,
+                    restrict_to_existing_products=True,
+                )
+            else:
+                rows = await sync_sales(session, self._client, store_id, slices)
             if not slices:
                 return rows, None, None
             return rows, slices[0].start, slices[-1].end_exclusive

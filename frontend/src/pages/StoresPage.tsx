@@ -1,18 +1,22 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronRight, MapPin, Search, Store } from "lucide-react";
+import { ChevronRight, FileSpreadsheet, MapPin, Search, Store } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/common/EmptyState";
 import { ErrorState } from "@/components/common/ErrorState";
+import { useOrderBlankStatusQuery } from "@/hooks/useOrderBlank";
 import { useStoresQuery } from "@/hooks/useStores";
 import type { StoreSummaryDto } from "@/api/types";
+import { cn } from "@/lib/cn";
 
 export function StoresPage() {
   const storesQuery = useStoresQuery();
+  const orderBlankQuery = useOrderBlankStatusQuery();
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
@@ -31,11 +35,35 @@ export function StoresPage() {
         title="Магазины"
         description="Выберите точку, чтобы посмотреть остатки и продажи по товарам."
         actions={
-          storesQuery.data ? (
-            <Badge variant="secondary">{storesQuery.data.length} всего</Badge>
-          ) : null
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Link
+              to="/order-blank"
+              className={cn(
+                "inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors",
+                "hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-muted-foreground",
+              )}
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Бланк заказа
+            </Link>
+            {storesQuery.data ? (
+              <Badge variant="secondary">{storesQuery.data.length} всего</Badge>
+            ) : null}
+          </div>
         }
       />
+
+      {orderBlankQuery.data?.needs_order_blank && orderBlankQuery.data.warning ? (
+        <Alert variant="warning">
+          <AlertTitle>
+            Бланк заказа{" "}
+            <Link className="font-semibold underline-offset-4 hover:underline" to="/order-blank">
+              — перейти к загрузке
+            </Link>
+          </AlertTitle>
+          <AlertDescription>{orderBlankQuery.data.warning}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="relative max-w-sm">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

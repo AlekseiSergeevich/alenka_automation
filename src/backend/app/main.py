@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -10,6 +12,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.backend.app.api.v1.router import build_api_router
 from src.backend.app.core.config import get_settings
+from src.backend.app.integrations.saby.client import SabyClient
+from src.backend.app.services.orchestrator import build_orchestrator
+from src.backend.app.services.startup_bootstrap import run_startup_bootstrap
 
 
 def configure_logging(level: str) -> None:
@@ -42,6 +47,27 @@ def create_app() -> FastAPI:
     redoc_url = "/redoc" if settings.enable_api_docs else None
     openapi_url = "/openapi.json" if settings.enable_openapi_json else None
 
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        log = logging.getLogger("candy_forecast.startup")
+        if settings.startup_bootstrap_enabled and settings.saby_is_configured:
+
+            async def _bootstrap() -> None:
+                try:
+                    cfg = get_settings()
+                    client = SabyClient(settings=cfg)
+                    orch = build_orchestrator(client)
+                    result = await run_startup_bootstrap(orch, cfg)
+                    log.info("startup bootstrap finished: %s", result.get("status"))
+                except Exception:
+                    log.exception("startup bootstrap failed")
+
+            if settings.startup_bootstrap_fail_fast:
+                await _bootstrap()
+            else:
+                asyncio.create_task(_bootstrap())
+        yield
+
     app = FastAPI(
         title=settings.app_name,
         debug=settings.app_debug,
@@ -49,6 +75,7 @@ def create_app() -> FastAPI:
         docs_url=docs_url,
         redoc_url=redoc_url,
         openapi_url=openapi_url,
+        lifespan=lifespan,
     )
     app.add_middleware(RequestIdMiddleware)
     if settings.cors_origins_list:

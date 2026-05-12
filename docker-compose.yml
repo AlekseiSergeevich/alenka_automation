@@ -29,6 +29,8 @@ services:
     volumes:
       - ./src/backend:/app/src/backend
       - ./alembic.ini:/app/alembic.ini
+      # Загруженные бланки заказа (ORDER_BLANK_STORAGE_DIR по умолчанию: data/order_blanks)
+      - ./data/order_blanks:/app/data/order_blanks
     env_file:
       - path: src/backend/.env
         required: false
@@ -40,6 +42,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Skip login UI (pair with AUTH_ENABLED=false in src/backend/.env).
+        VITE_DISABLE_AUTH: "true"
     ports:
       - "8080:80"
     depends_on:

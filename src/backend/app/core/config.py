@@ -8,6 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # .../src/backend/app/core/config.py -> parents[2] == .../src/backend
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+# Корень репозитория (родитель каталога ``src``)
+REPO_ROOT = BACKEND_DIR.parent.parent
 
 
 def _parse_csv_origins(v: str | list[str] | None) -> list[str]:
@@ -78,6 +80,24 @@ class Settings(BaseSettings):
     sales_window_days: int = 120
     # Safety overlap on incremental sales sync to cover late-arriving records.
     sales_sync_overlap_days: int = 1
+
+    # Startup / bootstrap: не блокирует API при отсутствии бланка заказа.
+    startup_bootstrap_enabled: bool = False
+    startup_bootstrap_load_facts: bool = True
+    startup_bootstrap_fail_fast: bool = False
+    startup_bootstrap_order_blank_path: Path | None = Field(default=None)
+    """Явный путь к .xls бланка; если None — ищется последний data/raw/*Бланк заказа*.xls."""
+
+    order_blank_storage_dir: Path = Field(
+        default_factory=lambda: REPO_ROOT / "data" / "order_blanks",
+        description="Каталог для сохранения загруженных .xls бланков заказа.",
+    )
+
+    overview_triggers_catalog_safe_ingestion: bool = True
+    """Для overview/list_store_products: склад и продажи без расширения catalog product."""
+
+    startup_bootstrap_use_advisory_lock: bool = True
+    """Один активный safe-bootstrap за раз (несколько workers): ``pg_try_advisory_lock``."""
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",

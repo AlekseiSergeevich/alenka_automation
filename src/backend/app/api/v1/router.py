@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from src.backend.app.api.v1.endpoints import auth, health, overview, saby, sync
+from src.backend.app.api.v1.endpoints import auth, health, order_blank, overview, saby, sync
 from src.backend.app.core.config import Settings
 
 
@@ -10,6 +10,7 @@ def build_api_router(settings: Settings) -> APIRouter:
     api_router.include_router(health.router, tags=["health"])
     api_router.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     api_router.include_router(overview.router, prefix="/api/v1", tags=["overview"])
+    api_router.include_router(order_blank.router, prefix="/api/v1", tags=["order-blank"])
     api_router.include_router(sync.router, prefix="/api/v1", tags=["sync"])
     if settings.enable_saby_debug_api:
         api_router.include_router(saby.router, prefix="/api/v1/saby", tags=["saby-debug"])

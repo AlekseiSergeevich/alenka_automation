@@ -158,3 +158,41 @@ export async function apiRequest<T>(
 
   return parseResponse<T>(response);
 }
+
+/** multipart/form-data (например загрузка файла); без JSON body и без ручного Content-Type. */
+export async function apiUploadFormData<T>(
+  path: string,
+  formData: FormData,
+  options: { signal?: AbortSignal } = {},
+): Promise<T> {
+  const url = buildUrl(path);
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  const token = getAccessToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: formData,
+      credentials: "include",
+      signal: options.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw error;
+    }
+    throw new ApiError("Не удалось связаться с сервером", {
+      status: 0,
+      code: "network_error",
+      payload: error,
+    });
+  }
+
+  return parseResponse<T>(response);
+}

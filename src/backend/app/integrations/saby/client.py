@@ -109,18 +109,17 @@ class SabyClient:
 
     async def price_list(
         self,
-        pointId : int,
-        actualDate : datetime,
+        point_id: int,
+        actual_date: datetime,
         page: int = 0,
-        pageSize: int = 100,
+        page_size: int = 100,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "page": page,
-            "pageSize": pageSize,
+            "pageSize": page_size,
+            "pointId": point_id,
+            "actualDate": actual_date.strftime("%Y-%m-%d"),
         }
-        params["pointId"] = pointId
-        params["actualDate"] = actualDate.strftime("%Y-%m-%d")
-        
         return await self._get("/retail/nomenclature/price-list", params=params)
 
 

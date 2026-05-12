@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from src.backend.app.ingestion.month_ranges import (
     calendar_days_across_slices,
@@ -10,6 +11,7 @@ from src.backend.app.ingestion.month_ranges import (
 )
 from src.backend.app.integrations.saby.schemas import (
     OrderLinePayload,
+    PointSchema,
     ProductBalanceSchema,
     RetailOrderPayload,
     iter_nomenclature_dicts,
@@ -31,6 +33,19 @@ def test_utc_calendar_month_slices_three_months_may_2026() -> None:
 def test_iter_sales_points_prefers_salespoints_key() -> None:
     items = iter_sales_point_dicts({"salesPoints": [{"id": 1, "name": "A"}]})
     assert len(items) == 1 and items[0]["id"] == 1
+
+
+def test_point_schema_warehouse_id_from_alias() -> None:
+    p = PointSchema.model_validate({"id": 1, "name": "A", "warehouseId": "42"})
+    assert p.warehouse_id == 42
+
+
+def test_product_balance_parses_extended_attributes() -> None:
+    row = ProductBalanceSchema.model_validate(
+        {"article": "X", "balance": "1", "type": "Foo", "quantityInBox": "6"}
+    )
+    assert row.type == "Foo"
+    assert row.quantity_in_box == Decimal("6")
 
 
 def test_iter_orders_prefers_orders_key() -> None:

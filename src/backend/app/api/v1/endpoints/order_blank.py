@@ -1,0 +1,222 @@
+"""Загрузка и статус ежемесячного бланка заказа (.xls)."""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import re
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.backend.app.api.deps import require_admin, require_user
+from src.backend.app.core.config import Settings, get_settings
+from src.backend.app.core.security import AuthUser
+from src.backend.app.db.session import get_session
+from src.backend.app.ingestion.order_blank import parse_order_blank
+from src.backend.app.models import OrderBlankUpload
+from src.backend.app.services.aggregate import refresh_aggregate
+from src.backend.app.services.order_blank_catalog import (
+    STATUS_FAILED,
+    STATUS_SUCCESS,
+    apply_order_blank_full_sync,
+    compute_order_blank_reminder_state,
+    utc_now,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/order-blank", tags=["order-blank"])
+
+_MAX_BYTES = 25 * 1024 * 1024
+
+
+class OrderBlankStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    product_count: int
+    catalog_empty: bool
+    needs_monthly_upload: bool
+    needs_order_blank: bool
+    last_success_applied_at: datetime | None = None
+    warning: str | None = None
+
+
+class OrderBlankUploadResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    row_count: int
+    applied_at: datetime
+    content_sha256: str
+    stored_path: str
+    original_filename: str
+
+
+def _blank_warning_for_state(catalog_empty: bool, needs_monthly: bool) -> str | None:
+    if catalog_empty:
+        return (
+            "Справочник товаров пуст; загрузите бланк заказа (.xls), чтобы включить "
+            "синхронизацию остатков и продаж."
+        )
+    if needs_monthly:
+        return (
+            "В текущем месяце ещё не загружен актуальный бланк заказа (.xls). "
+            "Загрузите файл, чтобы обновить каталог."
+        )
+    return None
+
+
+@router.get("/status", response_model=OrderBlankStatusResponse)
+async def order_blank_status(
+    _: AuthUser = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+) -> OrderBlankStatusResponse:
+    hint = await compute_order_blank_reminder_state(session)
+    return OrderBlankStatusResponse(
+        product_count=hint.product_count,
+        catalog_empty=hint.catalog_empty,
+        needs_monthly_upload=hint.needs_monthly_upload,
+        needs_order_blank=hint.needs_order_blank_attention,
+        last_success_applied_at=hint.last_success_applied_at,
+        warning=_blank_warning_for_state(hint.catalog_empty, hint.needs_monthly_upload),
+    )
+
+
+def _sanitize_stub(name: str) -> str:
+    base = Path(name).name
+    stem = Path(base).stem
+    cleaned = re.sub(r"[^\w.\-]+", "_", stem, flags=re.UNICODE).strip("._")
+    return (cleaned[:80] or "blank")
+
+
+async def _persist_failed_upload(
+    session: AsyncSession,
+    *,
+    original_filename: str,
+    stored_path: str,
+    content_sha256: str,
+    message: str,
+) -> None:
+    rec = OrderBlankUpload(
+        original_filename=original_filename[:512],
+        stored_path=stored_path[:1024],
+        content_sha256=content_sha256,
+        uploaded_at=utc_now(),
+        applied_at=None,
+        row_count=0,
+        status=STATUS_FAILED,
+        error_message=message[:8000],
+    )
+    session.add(rec)
+
+
+@router.post("/upload", response_model=OrderBlankUploadResponse)
+async def order_blank_upload(
+    _: AuthUser = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    file: UploadFile = File(..., description="Файл бланка заказа (.xls)"),
+) -> OrderBlankUploadResponse:
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename is required",
+        )
+    if not file.filename.lower().endswith(".xls"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only .xls files are supported",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty file",
+        )
+    if len(content) > _MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large",
+        )
+
+    digest = hashlib.sha256(content).hexdigest()
+    storage_root = Path(settings.order_blank_storage_dir).expanduser().resolve()
+    storage_root.mkdir(parents=True, exist_ok=True)
+
+    ts = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    stub = _sanitize_stub(file.filename)
+    stored_name = f"{ts}_{digest[:16]}_{stub}.xls"
+    abs_path = storage_root / stored_name
+    abs_path.write_bytes(content)
+    # Храним путь относительно корня хранилища (один каталог).
+    rel_stored = stored_name
+
+    original = Path(file.filename).name[:512]
+
+    try:
+        rows, articles = parse_order_blank(abs_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Order blank parse failed: %s", exc)
+        async with session.begin():
+            await _persist_failed_upload(
+                session,
+                original_filename=original,
+                stored_path=rel_stored,
+                content_sha256=digest,
+                message=f"parse_error: {exc}",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid order blank file: {exc}",
+        ) from exc
+
+    if not articles:
+        async with session.begin():
+            await _persist_failed_upload(
+                session,
+                original_filename=original,
+                stored_path=rel_stored,
+                content_sha256=digest,
+                message="parse_ok_but_no_articles",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No product rows with УКП found in file",
+        )
+
+    applied_at = utc_now()
+    async with session.begin():
+        n = await apply_order_blank_full_sync(
+            session, rows, articles, now=applied_at
+        )
+        await refresh_aggregate(session, store_id=None)
+        rec = OrderBlankUpload(
+            original_filename=original,
+            stored_path=rel_stored,
+            content_sha256=digest,
+            uploaded_at=applied_at,
+            applied_at=applied_at,
+            row_count=n,
+            status=STATUS_SUCCESS,
+            error_message=None,
+        )
+        session.add(rec)
+        await session.flush()
+
+    oid = rec.id
+    assert oid is not None
+
+    return OrderBlankUploadResponse(
+        id=int(oid),
+        row_count=n,
+        applied_at=applied_at,
+        content_sha256=digest,
+        stored_path=rel_stored,
+        original_filename=original,
+    )
+

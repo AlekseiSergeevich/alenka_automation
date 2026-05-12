@@ -50,6 +50,28 @@ export interface OverviewMetaDto {
   offset: number;
   stale: boolean;
   warning: string | null;
+  needs_order_blank?: boolean;
+  catalog_empty?: boolean;
+  needs_monthly_upload?: boolean;
+  last_order_blank_applied_at?: string | null;
+}
+
+export interface OrderBlankStatusDto {
+  product_count: number;
+  catalog_empty: boolean;
+  needs_monthly_upload: boolean;
+  needs_order_blank: boolean;
+  last_success_applied_at: string | null;
+  warning: string | null;
+}
+
+export interface OrderBlankUploadResponseDto {
+  id: number;
+  row_count: number;
+  applied_at: string;
+  content_sha256: string;
+  stored_path: string;
+  original_filename: string;
 }
 
 export interface OverviewResponseDto {

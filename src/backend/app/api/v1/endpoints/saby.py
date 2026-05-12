@@ -158,7 +158,10 @@ async def list_price_list(
     ad = actualDate or date.today()
     actual_dt = datetime(ad.year, ad.month, ad.day, tzinfo=timezone.utc)
     return await client.price_list(
-        pointId=pointId, actualDate=actual_dt, page=page, pageSize=pageSize
+        point_id=pointId,
+        actual_date=actual_dt,
+        page=page,
+        page_size=pageSize,
     )
 
 

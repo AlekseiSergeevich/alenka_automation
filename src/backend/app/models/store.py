@@ -16,9 +16,9 @@ class Store(Base):
     name: Mapped[str] = mapped_column(String(512), nullable=False)
     address: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     locality: Mapped[str] = mapped_column(String(256), nullable=False, default="")
-    prices: Mapped[list[int]] = mapped_column(
-        ARRAY(Integer), nullable=False, default=list, server_default="{}"
-    )
+    warehouse_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Первый id из GET /retail/nomenclature/price-list для точки (кэш для list_products).
+    price_list_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     first_seen_at: Mapped[datetime] = mapped_column(

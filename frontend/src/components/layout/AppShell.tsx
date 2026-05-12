@@ -1,10 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LogOut, Store } from "lucide-react";
+import { FileSpreadsheet, LogOut, Store } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { authApi } from "@/api/auth";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/cn";
+import { isAuthUiDisabled } from "@/lib/authUi";
 
 export function AppShell() {
   const { user } = useAuth();
@@ -15,7 +16,7 @@ export function AppShell() {
     mutationFn: authApi.logout,
     onSettled: () => {
       queryClient.clear();
-      navigate("/login", { replace: true });
+      navigate(isAuthUiDisabled() ? "/stores" : "/login", { replace: true });
     },
   });
 
@@ -32,9 +33,12 @@ export function AppShell() {
                 Candy Forecast
               </span>
             </Link>
-            <nav className="hidden items-center gap-1 md:flex">
+            <nav className="flex flex-wrap items-center gap-1">
               <NavItem to="/stores" icon={<Store className="h-4 w-4" />}>
                 Магазины
+              </NavItem>
+              <NavItem to="/order-blank" icon={<FileSpreadsheet className="h-4 w-4" />}>
+                Бланк заказа
               </NavItem>
             </nav>
           </div>
@@ -49,15 +53,17 @@ export function AppShell() {
                 </p>
               </div>
             ) : null}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => logoutMutation.mutate()}
-              loading={logoutMutation.isPending}
-            >
-              <LogOut className="h-4 w-4" />
-              Выйти
-            </Button>
+            {isAuthUiDisabled() ? null : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => logoutMutation.mutate()}
+                loading={logoutMutation.isPending}
+              >
+                <LogOut className="h-4 w-4" />
+                Выйти
+              </Button>
+            )}
           </div>
         </div>
       </header>

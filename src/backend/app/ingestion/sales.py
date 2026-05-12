@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import case, delete, func, insert, select
 from sqlalchemy import text as sql_text
 from sqlalchemy import and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -121,15 +121,29 @@ async def sync_sales(
     client: SabyClient,
     store_id: int,
     slices: list[MonthSlice],
+    *,
+    restrict_to_existing_products: bool = False,
 ) -> int:
     """Помесячная загрузка заказов: для каждого календарного месяца — отдельные запросы к Saby.
 
     Для каждого месяца: DELETE sale_line за интервал затем INSERT; в конце
     перестраиваются строки ``sales_monthly`` для охваченных месяцевов.
+
+    При ``restrict_to_existing_products=True`` строки чеков с артикулами вне ``product``
+    отбрасываются, upsert ``product`` из чеков не выполняется.
     """
 
     if not slices:
         return 0
+
+    allowed_articles: set[str] | None = None
+    if restrict_to_existing_products:
+        rows = (
+            await session.execute(
+                select(Product.article).where(Product.article.isnot(None))
+            )
+        ).all()
+        allowed_articles = {str(a[0]).strip() for a in rows if a[0]}
 
     overall_from = slices[0].start
     overall_to_exclusive = slices[-1].end_exclusive
@@ -145,6 +159,8 @@ async def sync_sales(
             from_datetime=start,
             to_datetime=end_exc,
             shared_now=now,
+            allowed_articles=allowed_articles,
+            upsert_products=not restrict_to_existing_products,
         )
 
     await refresh_sales_monthly_for_store(
@@ -167,6 +183,8 @@ async def _sync_sales_window(
     to_datetime: datetime,
     *,
     shared_now: datetime,
+    allowed_articles: set[str] | None = None,
+    upsert_products: bool = True,
 ) -> int:
     if to_datetime <= from_datetime:
         raise ValueError("to_datetime must be strictly greater than from_datetime")
@@ -206,19 +224,22 @@ async def _sync_sales_window(
                 if not raw_key:
                     continue
                 article = resolver.get(raw_key, raw_key)
+                if allowed_articles is not None and article not in allowed_articles:
+                    continue
                 name = line.name or ""
                 unit_val = line.unit or ""
                 qty = to_decimal(line.count)
-                product_rows.setdefault(
-                    article,
-                    {
-                        "article": article,
-                        "name": name,
-                        "unit": unit_val,
-                        "updated_at": shared_now,
-                        "nom_number": None,
-                    },
-                )
+                if upsert_products:
+                    product_rows.setdefault(
+                        article,
+                        {
+                            "article": article,
+                            "name": name,
+                            "unit": unit_val,
+                            "updated_at": shared_now,
+                            "nom_number": None,
+                        },
+                    )
                 sale_rows.append(
                     {
                         "store_id": store_id,
@@ -235,7 +256,7 @@ async def _sync_sales_window(
             break
         page += 1
 
-    if product_rows:
+    if upsert_products and product_rows:
         stmt = pg_insert(Product).values(list(product_rows.values()))
         stmt = stmt.on_conflict_do_update(
             index_elements=[Product.article],
@@ -244,6 +265,26 @@ async def _sync_sales_window(
                 "unit": stmt.excluded.unit,
                 "updated_at": shared_now,
                 "nom_number": func.coalesce(Product.nom_number, stmt.excluded.nom_number),
+                "type": func.coalesce(
+                    func.nullif(Product.type, ""),
+                    stmt.excluded.type,
+                ),
+                "focus": func.coalesce(
+                    func.nullif(Product.focus, ""),
+                    stmt.excluded.focus,
+                ),
+                "group_abc": func.coalesce(
+                    func.nullif(Product.group_abc, ""),
+                    stmt.excluded.group_abc,
+                ),
+                "feature": func.coalesce(
+                    func.nullif(Product.feature, ""),
+                    stmt.excluded.feature,
+                ),
+                "quantity_in_box": case(
+                    (stmt.excluded.quantity_in_box > 0, stmt.excluded.quantity_in_box),
+                    else_=Product.quantity_in_box,
+                ),
             },
         )
         await session.execute(stmt)

@@ -4,6 +4,10 @@
 PostgreSQL и отдаёт пользователям денормализованное представление «магазин × товар»
 с помесячными продажами за последние N календарных месяцев.
 
+Номенклатура для остатков берётся из прайс-листа точки: первый `id` из
+`GET /retail/nomenclature/price-list` кэшируется в колонке `store.price_list_id` и
+передаётся в `GET /retail/v2/nomenclature/list` как `priceListId` (см. миграцию `0006_plid`).
+
 ## Быстрый старт
 
 ```bash
@@ -137,6 +141,16 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
 - `GET /api/v1/stores` — список известных торговых точек.
 - `GET /api/v1/stores/{store_id}/products` — срез по одному магазину.
 - `GET /api/v1/products/{article}` — один артикул по всем магазинам.
+
+- `GET /api/v1/order-blank/status` — статус загрузки бланка заказа (последняя успешная
+  загрузка, напоминание о месяце, число строк в каталоге `product`).
+- `POST /api/v1/order-blank/upload` — только **admin**: multipart `file` (.xls), сохраняет
+  файл в `ORDER_BLANK_STORAGE_DIR`, обновляет `product` как источник истины, пишет
+  строку в `order_blank_upload`. После деплоя выполните `alembic upgrade head`, чтобы
+  создать таблицу `order_blank_upload`.
+
+В ответах `overview` / `stores/.../products` поле `meta.needs_order_blank` — «нужно
+разгрести бланк»: пустой каталог **или** нет успешной загрузки в текущем UTC‑месяце.
 
 Каждое чтение также запускает фоновую проверку TTL через `BackgroundTasks`; устаревшие
 ответы помечаются `meta.stale=true`.

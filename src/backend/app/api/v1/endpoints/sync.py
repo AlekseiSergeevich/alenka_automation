@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -6,6 +7,7 @@ from src.backend.app.api.deps import get_orchestrator, require_admin, require_us
 from src.backend.app.core.config import Settings, get_settings
 from src.backend.app.models import SyncEntity
 from src.backend.app.services import FreshnessInfo, SyncOrchestrator, TriggerMode
+from src.backend.app.services.startup_bootstrap import run_startup_bootstrap
 
 router = APIRouter()
 
@@ -34,6 +36,32 @@ async def bootstrap_sync(
     summary = await orchestrator.bootstrap_all_sync()
     summary["months_back"] = settings.sales_months_back
     summary["detail"] = "Bootstrap completed."
+    return summary
+
+
+@router.post(
+    "/sync/bootstrap-safe",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_admin)],
+)
+async def bootstrap_safe_sync(
+    order_blank: str | None = Query(
+        default=None,
+        description="Необязательный путь к .xls бланка; иначе из настроек или авто-поиск в data/raw.",
+    ),
+    orchestrator: SyncOrchestrator = Depends(get_orchestrator),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Безопасный bootstrap: точки → seed бланка при пустом product → склад/продажи без расширения каталога."""
+
+    blank_path = Path(order_blank).expanduser() if order_blank else None
+    summary = await run_startup_bootstrap(
+        orchestrator,
+        settings,
+        order_blank_path=blank_path,
+    )
+    summary["months_back"] = settings.sales_months_back
+    summary["detail"] = "Safe bootstrap finished."
     return summary
 
 

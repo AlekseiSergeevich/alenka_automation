@@ -25,7 +25,6 @@ class SalesMonthly(Base):
     month_start: Mapped[date] = mapped_column(Date, primary_key=True)
     qty: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, default=0)
     unit: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    orders_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     refreshed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

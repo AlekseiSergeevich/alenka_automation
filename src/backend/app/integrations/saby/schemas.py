@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -26,8 +27,27 @@ class PointSchema(BaseModel):
     prices: list[int] = Field(
         default_factory=list, description="Список идентификаторов прайс-листов"
     )
+    warehouse_id: int = Field(
+        default=0,
+        validation_alias=AliasChoices("warehouseId", "warehouse_id", "WarehouseId"),
+        description="Склад по умолчанию для точки (если отдаёт API); иначе 0",
+    )
 
     model_config = ConfigDict(extra="ignore")
+
+    @field_validator("warehouse_id", mode="before")
+    @classmethod
+    def _coerce_warehouse_id(cls, v: Any) -> int:
+        if v is None or v == "":
+            return 0
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, int):
+            return v
+        try:
+            return int(str(v).strip())
+        except ValueError:
+            return 0
 
 
 class SalesPointsResponse(BaseModel):
@@ -92,6 +112,86 @@ class PriceListSchema(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class PriceListListResponse(BaseModel):
+    """Ответ GET /retail/nomenclature/price-list — список прайсов в разных ключах."""
+
+    price_lists: list[dict[str, Any]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("priceLists", "price_lists", "PriceLists"),
+    )
+    items: list[dict[str, Any]] = Field(default_factory=list, alias="items")
+    legacy_list_rows: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="list",
+        description='Ключ ответа Saby ``"list"``.',
+    )
+    result: list[dict[str, Any]] = Field(default_factory=list, alias="result")
+    results: list[dict[str, Any]] = Field(default_factory=list, alias="results")
+    data: list[dict[str, Any]] = Field(default_factory=list, alias="data")
+    rows: list[dict[str, Any]] = Field(default_factory=list, alias="rows")
+
+    model_config = ConfigDict(extra="ignore")
+
+
+def iter_price_list_dicts(payload: dict[str, Any] | list[Any] | None) -> list[dict[str, Any]]:
+    """Нормализует ответ price-list к списку dict с полем ``id``."""
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+    if not isinstance(payload, dict):
+        return []
+    try:
+        parsed = PriceListListResponse.model_validate(payload)
+        for bucket in (
+            parsed.price_lists,
+            parsed.items,
+            parsed.legacy_list_rows,
+            parsed.result,
+            parsed.results,
+            parsed.data,
+            parsed.rows,
+        ):
+            if bucket:
+                return [x for x in bucket if isinstance(x, dict)]
+    except Exception:
+        pass
+    for key in (
+        "priceLists",
+        "price_lists",
+        "PriceLists",
+        "items",
+        "list",
+        "result",
+        "results",
+        "payload",
+        "data",
+        "rows",
+    ):
+        v = payload.get(key)
+        if isinstance(v, list):
+            return [x for x in v if isinstance(x, dict)]
+    for value in payload.values():
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            return [x for x in value if isinstance(x, dict)]
+    return []
+
+
+def first_price_list_id(payload: dict[str, Any] | list[Any] | None) -> int | None:
+    """Первый валидный ``id`` из ответа price-list (как договорено — обычно один прайс на точку)."""
+    for d in iter_price_list_dicts(payload):
+        raw = d.get("id")
+        if raw is None:
+            raw = d.get("Id")
+        if raw is None:
+            continue
+        try:
+            return int(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 # --- Номенклатура / остаток по точке (retail v2 list) ---
 
 
@@ -105,8 +205,36 @@ class ProductBalanceSchema(BaseModel):
     balance: str = ""
     name: str = ""
     unit: str = ""
+    type: str = ""
+    focus: str = ""
+    group_abc: str = ""
+    feature: str = ""
+    quantity_in_box: Decimal = Field(default=Decimal("0"))
 
     model_config = ConfigDict(extra="ignore")
+
+    @field_validator("quantity_in_box", mode="before")
+    @classmethod
+    def _coerce_quantity_in_box(cls, v: Any) -> Decimal:
+        if v is None or v == "":
+            return Decimal("0")
+        if isinstance(v, Decimal):
+            return v
+        try:
+            return Decimal(str(v).strip().replace(",", "."))
+        except Exception:
+            return Decimal("0")
+
+    @staticmethod
+    def _first_str(d: dict[str, Any], keys: tuple[str, ...]) -> str:
+        for k in keys:
+            raw = d.get(k)
+            if raw is None:
+                continue
+            s = str(raw).strip()
+            if s:
+                return s
+        return ""
 
     @model_validator(mode="before")
     @classmethod
@@ -146,6 +274,32 @@ class ProductBalanceSchema(BaseModel):
             d["article"] = ""
         if d.get("nom_number") is None:
             d["nom_number"] = ""
+
+        d["type"] = cls._first_str(
+            d,
+            ("type", "Type", "productType", "ProductType", "nomenclatureType", "NomenclatureType"),
+        )
+        d["focus"] = cls._first_str(d, ("focus", "Focus", "productFocus", "marketingFocus"))
+        d["group_abc"] = cls._first_str(
+            d,
+            ("groupAbc", "group_abc", "abcGroup", "ABC", "ABCGroup", "segmentAbc"),
+        )
+        d["feature"] = cls._first_str(d, ("feature", "Feature", "productFeature", "label"))
+        qraw = None
+        for k in (
+            "quantityInBox",
+            "quantity_in_box",
+            "itemsPerBox",
+            "ItemsPerBox",
+            "multiplicity",
+            "Multiplicity",
+            "inBox",
+            "InBox",
+        ):
+            if d.get(k) is not None and str(d.get(k)).strip() != "":
+                qraw = d.get(k)
+                break
+        d["quantity_in_box"] = qraw if qraw is not None else d.get("quantity_in_box")
         return d
 
 

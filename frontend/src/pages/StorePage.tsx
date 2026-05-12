@@ -214,10 +214,11 @@ export function StorePage() {
         }
       />
 
-      {meta?.stale && meta.warning ? (
+      {meta?.warning ? (
         <Alert variant="warning">
           <AlertTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4" /> Данные обновляются
+            <AlertTriangle className="h-4 w-4" />
+            {meta.stale ? "Данные обновляются" : "Внимание"}
           </AlertTitle>
           <AlertDescription>{meta.warning}</AlertDescription>
         </Alert>
