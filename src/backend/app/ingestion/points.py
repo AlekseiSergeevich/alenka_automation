@@ -89,7 +89,11 @@ async def sync_points(session: AsyncSession, client: SabyClient) -> int:
             await session.execute(stmt)
             total += len(batch)
 
-        if len(items) < _PAGE_SIZE:
+        outcome = raw.get("outcome") or raw.get("outCome") or {}
+        has_more = outcome.get("hasMore")
+        if has_more is False:
+            break
+        if has_more is None and len(items) == 0:
             break
         page += 1
 

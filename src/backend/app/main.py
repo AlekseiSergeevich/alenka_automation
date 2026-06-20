@@ -4,7 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,14 +17,30 @@ from src.backend.app.services.orchestrator import build_orchestrator
 from src.backend.app.services.startup_bootstrap import run_startup_bootstrap
 
 
+import os
+from logging.handlers import RotatingFileHandler
+
 def configure_logging(level: str) -> None:
     root = logging.getLogger()
     if root.handlers:
         root.setLevel(getattr(logging, level.upper(), logging.INFO))
         return
+
+    log_formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(log_formatter)
+
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        os.path.join(log_dir, "app.log"), maxBytes=10 * 1024 * 1024, backupCount=5
+    )
+    file_handler.setFormatter(log_formatter)
+
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=[console_handler, file_handler],
     )
 
 
@@ -49,6 +65,9 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        from src.backend.app.core.logging_ws import ws_log_handler
+        ws_log_handler.set_loop(asyncio.get_running_loop())
+        
         log = logging.getLogger("candy_forecast.startup")
         if settings.startup_bootstrap_enabled and settings.saby_is_configured:
 
@@ -141,6 +160,23 @@ def create_app() -> FastAPI:
             "health": "/health",
             "health_ready": "/health/ready",
         }
+
+    @app.get("/health/ready")
+    async def ready() -> dict[str, str]:
+        return {"status": "ready"}
+
+    @app.websocket("/api/v1/ws/logs")
+    async def websocket_logs(websocket: WebSocket):
+        await websocket.accept()
+        from src.backend.app.core.logging_ws import ws_log_handler
+        ws_log_handler.websockets.add(websocket)
+        try:
+            while True:
+                await websocket.receive_text()
+        except Exception:
+            pass
+        finally:
+            ws_log_handler.websockets.remove(websocket)
 
     app.include_router(build_api_router(settings))
     return app

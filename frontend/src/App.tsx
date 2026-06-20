@@ -7,7 +7,18 @@ import { StorePage } from "@/pages/StorePage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { OrderBlankPage } from "@/pages/OrderBlankPage";
 
+import { useEffect } from "react";
+
 export function App() {
+  useEffect(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws/logs`);
+    ws.onmessage = (event) => {
+      console.log("%c[Backend]", "color: #ff00ff; font-weight: bold", event.data);
+    };
+    return () => ws.close();
+  }, []);
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />

@@ -31,6 +31,8 @@ services:
       - ./alembic.ini:/app/alembic.ini
       # Загруженные бланки заказа (ORDER_BLANK_STORAGE_DIR по умолчанию: data/order_blanks)
       - ./data/order_blanks:/app/data/order_blanks
+      # Папка для логов бэкенда
+      - ./logs:/app/logs
     env_file:
       - path: src/backend/.env
         required: false

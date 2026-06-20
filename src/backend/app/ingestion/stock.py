@@ -128,7 +128,7 @@ def _apply_article_remaps(
     for row in product_rows:
         row = dict(row)
         original_article = row["article"].strip()
-        vendor_article = remap.get(original_article, original_article).strip()
+        vendor_article = remap.get(original_article, original_article).strip() # type: ignore
 
         nn_out = row.get("nom_number")
         if vendor_article != original_article:
@@ -160,7 +160,7 @@ def _apply_article_remaps(
 
     keyed: dict[tuple[int, str], dict[str, Any]] = {}
     for row in stock_rows:
-        na = remap.get(row["article"], row["article"]).strip()
+        na = remap.get(row["article"], row["article"]).strip() # type: ignore
         nr = dict(row)
         nr["article"] = na
         keyed[(int(nr["store_id"]), na)] = nr
@@ -246,7 +246,11 @@ async def sync_stock(
                 }
             )
 
-        if len(items) < _PAGE_SIZE:
+        outcome = raw.get("outcome") or raw.get("outCome") or {}
+        has_more = outcome.get("hasMore")
+        if has_more is False:
+            break
+        if has_more is None and len(items) == 0:
             break
         page += 1
 
@@ -395,7 +399,11 @@ async def sync_stock_for_existing_products(
                 }
             )
 
-        if len(items) < _PAGE_SIZE:
+        outcome = raw.get("outcome") or raw.get("outCome") or {}
+        has_more = outcome.get("hasMore")
+        if has_more is False:
+            break
+        if has_more is None and len(items) == 0:
             break
         page += 1
 

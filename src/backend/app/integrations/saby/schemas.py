@@ -341,6 +341,11 @@ class OrderLinePayload(BaseModel):
     name: str | None = ""
     unit: str | None = ""
     count: Any = None
+    is_return: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("isReturn", "IsReturn", "is_return", "IsReturned", "isReturned"),
+        description="Флаг возврата",
+    )
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 

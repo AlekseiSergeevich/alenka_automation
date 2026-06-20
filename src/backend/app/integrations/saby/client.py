@@ -17,6 +17,7 @@ class SabyClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._cached_token: str | None = settings.saby_access_token
 
     async def list_sales_points(
         self,
@@ -164,6 +165,12 @@ class SabyClient:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(service_url, json=body, headers=headers)
 
+            if response.status_code == status.HTTP_401_UNAUTHORIZED:
+                self._cached_token = None
+                token = await self._get_access_token()
+                headers["X-SBISAccessToken"] = token
+                response = await client.post(service_url, json=body, headers=headers)
+
         if response.is_error:
             raise HTTPException(
                 status_code=response.status_code,
@@ -198,6 +205,12 @@ class SabyClient:
         ) as client:
             response = await client.get(path, params=params, headers=headers)
 
+            if response.status_code == status.HTTP_401_UNAUTHORIZED:
+                self._cached_token = None
+                token = await self._get_access_token()
+                headers["X-SBISAccessToken"] = token
+                response = await client.get(path, params=params, headers=headers)
+
         if response.is_error:
             raise HTTPException(
                 status_code=response.status_code,
@@ -209,8 +222,8 @@ class SabyClient:
         return response.json()
 
     async def _get_access_token(self) -> str:
-        if self._settings.saby_access_token:
-            return self._settings.saby_access_token
+        if self._cached_token:
+            return self._cached_token
 
         if not (
             self._settings.saby_app_client_id
@@ -230,6 +243,7 @@ class SabyClient:
             "app_secret": self._settings.saby_app_secret,
             "secret_key": self._settings.saby_secret_key,
         }
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(self._settings.saby_auth_url, json=payload)
 
@@ -244,9 +258,14 @@ class SabyClient:
 
         data = response.json()
         token = data.get("token") or data.get("access_token")
+        
         if not token:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Saby authorization response does not contain token.",
             )
-        return str(token)
+            
+        # 3. Сохраняем полученный токен в наш кэш!
+        self._cached_token = str(token)
+        
+        return self._cached_token

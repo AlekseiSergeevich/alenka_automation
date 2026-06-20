@@ -229,6 +229,8 @@ async def _sync_sales_window(
                 name = line.name or ""
                 unit_val = line.unit or ""
                 qty = to_decimal(line.count)
+                if line.is_return is True:
+                    qty = -abs(qty)
                 if upsert_products:
                     product_rows.setdefault(
                         article,
@@ -252,7 +254,11 @@ async def _sync_sales_window(
                     }
                 )
 
-        if len(orders) < _PAGE_SIZE:
+        outcome = raw.get("outcome") or raw.get("outCome") or {}
+        has_more = outcome.get("hasMore")
+        if has_more is False:
+            break
+        if has_more is None and len(orders) == 0:
             break
         page += 1
 
