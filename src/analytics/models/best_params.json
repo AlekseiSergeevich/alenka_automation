@@ -1,0 +1,12 @@
+{
+    "max_depth": 8,
+    "n_estimators": 514,
+    "learning_rate": 0.020190704602494485,
+    "subsample": 0.856584168123017,
+    "colsample_bytree": 0.6712263048282858,
+    "min_child_weight": 8,
+    "tweedie_variance_power": 1.8607348638588146,
+    "objective": "reg:tweedie",
+    "enable_categorical": true,
+    "random_state": 42
+}

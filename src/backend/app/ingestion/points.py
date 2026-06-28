@@ -100,6 +100,10 @@ async def sync_points(session: AsyncSession, client: SabyClient) -> int:
     return total
 
 
+# Укажите здесь ID магазинов, которые вы хотите получать (остальные будут игнорироваться)
+# Пример: ALLOWED_STORE_IDS = {12345, 67890}
+ALLOWED_STORE_IDS = {170, 2116, 20268, 25042}
+
 def _build_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc)
     rows: list[dict[str, Any]] = []
@@ -109,6 +113,11 @@ def _build_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         except ValidationError:
             logger.warning("Skipping point with invalid payload: %s", item.get("id"))
             continue
+            
+        # Если список задан и id магазина не в нем — пропускаем
+        if ALLOWED_STORE_IDS and point.id not in ALLOWED_STORE_IDS:
+            continue
+            
         rows.append(
             {
                 "id": point.id,

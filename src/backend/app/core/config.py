@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     # How long cached data is considered fresh, in seconds.
     ttl_points_seconds: int = 24 * 60 * 60
     ttl_stock_seconds: int = 15 * 60
-    ttl_sales_seconds: int = 30 * 60
+    ttl_sales_seconds: int = 7 * 24 * 60 * 60 
 
     # Последние N календарных месяцев для помесячной статистики и агрегата.
     sales_months_back: int = Field(default=3, ge=1, le=120)
