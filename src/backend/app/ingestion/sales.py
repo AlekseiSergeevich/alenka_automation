@@ -86,7 +86,6 @@ async def refresh_sales_monthly_for_store(
                 month_start,
                 qty,
                 unit,
-                orders_count,
                 refreshed_at
             )
             SELECT
@@ -95,9 +94,6 @@ async def refresh_sales_monthly_for_store(
                 (DATE_TRUNC('month', sl.sold_at AT TIME ZONE 'UTC'))::date AS month_start,
                 SUM(sl.qty) AS qty,
                 COALESCE(MAX(NULLIF(TRIM(sl.unit), '')), '') AS unit,
-                COUNT(
-                    DISTINCT COALESCE(NULLIF(sl.external_order_id, ''), sl.id::text)
-                ) AS orders_count,
                 :now_ts
             FROM sale_line sl
             WHERE sl.store_id = :store_id

@@ -274,8 +274,44 @@ export function StorePage() {
     }
   };
 
-  const handleGenerateOrder = () => {
-    alert(`Заказ сформирован\n\nУтверждено позиций: ${approvedSkus.size}. Файл готов к отправке (в разработке).`);
+  const handleGenerateOrder = async () => {
+    if (approvedSkus.size === 0) return;
+    
+    const orders: Record<string, number> = {};
+    for (const sku of approvedSkus) {
+      const val = orderValues[sku];
+      if (val) {
+        orders[sku] = parseInt(val, 10);
+      } else {
+        const row = rows.find(r => r.article === sku);
+        if (row && row.recommendedQty !== null) {
+          orders[sku] = Math.ceil(row.recommendedQty);
+        }
+      }
+    }
+
+    try {
+      const response = await fetch('/api/v1/order-blank/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ store_id: storeId, orders })
+      });
+      
+      if (!response.ok) throw new Error('Не удалось сформировать заказ');
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `order_store_${storeId}.xls`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка при формировании заказа');
+    }
   };
 
   return (
@@ -405,7 +441,7 @@ export function StorePage() {
             />
           </div>
         ) : (
-          <Table>
+          <Table wrapperClassName="max-h-[calc(100vh-250px)]">
             <TableHeader className="sticky top-0 bg-background/95 backdrop-blur z-10 shadow-sm">
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id} className="hover:bg-transparent">

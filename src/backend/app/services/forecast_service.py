@@ -111,6 +111,9 @@ mean())
                                                                                                                             
     # 6. Оставляем только самую последнюю строку для каждого SKU (это точка, с которой мы делаем прыжок в будущее)       
     forecast_df = df.groupby("sku").tail(1).copy()                                                                       
+                                                                                                                        
+    if forecast_df.empty:
+        return []                                                                       
                                                                                                                             
     # 7. Заполняем пропуски и выравниваем категории по исходному датасету
     time_cols = ["lag_1", "lag_2", "lag_3", "ma3", "ma6", "median3", "median6", "ma3_non_zero", "non_zero_share_6", "lag_1_to_ma3", "month_num", "month_sin", "month_cos"]

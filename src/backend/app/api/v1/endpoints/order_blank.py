@@ -257,3 +257,35 @@ async def order_blank_upload(
         original_filename=original,
     )
 
+from src.backend.app.services.order_export import export_order_to_xls
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+import tempfile
+
+class OrderExportRequest(BaseModel):
+    store_id: int
+    orders: dict[str, int]
+
+@router.post("/export")
+async def export_order(
+    req: OrderExportRequest,
+    session: AsyncSession = Depends(get_session)
+):
+    from src.backend.app.ingestion.order_blank import find_latest_order_blank_xls, project_root_from_here
+    
+    root = project_root_from_here()
+    template_path = find_latest_order_blank_xls(root)
+    if not template_path:
+        raise HTTPException(status_code=404, detail="Нет загруженного бланка заказа")
+        
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xls")
+    out_file.close()
+    
+    export_order_to_xls(template_path, out_file.name, req.orders)
+    
+    return FileResponse(
+        out_file.name, 
+        media_type="application/vnd.ms-excel",
+        filename=f"order_store_{req.store_id}.xls"
+    )
+
