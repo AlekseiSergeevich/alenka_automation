@@ -208,6 +208,43 @@ async def order_blank_upload(
         session.add(rec)
         await session.flush()
 
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from src.backend.app.models.order_blank_item import OrderBlankItem
+
+        items_to_insert = []
+        for r in rows:
+            is_new_val = 1 if r["feature"] == "Новинка" else 0
+            focus_val = str(r["focus"]).strip() if r["focus"] else "Прочее"
+            if not focus_val:
+                focus_val = "Прочее"
+            abc_val = str(r["group_abc"]).strip() if r["group_abc"] else "Unknown"
+            if not abc_val:
+                abc_val = "Unknown"
+            item_type_val = str(r["type"]).strip() if r["type"] else "Unknown"
+            if not item_type_val:
+                item_type_val = "Unknown"
+            brand_val = str(r.get("brand")).strip() if r.get("brand") else "Unknown"
+            if not brand_val or brand_val == "None":
+                brand_val = "Unknown"
+
+            items_to_insert.append({
+                "upload_id": rec.id,
+                "sku": r["article"],
+                "name": r["name"],
+                "is_new": is_new_val,
+                "focus": focus_val,
+                "abc_group": abc_val,
+                "item_type": item_type_val,
+                "brand": brand_val,
+                "base_price": r.get("base_price", 0),
+                "shelf_life_days": r.get("shelf_life_days", 0),
+                "weight_gr": r.get("weight_gr", 0),
+            })
+
+        if items_to_insert:
+            stmt = pg_insert(OrderBlankItem).values(items_to_insert)
+            await session.execute(stmt)
+
     oid = rec.id
     assert oid is not None
 

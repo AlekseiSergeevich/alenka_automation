@@ -99,6 +99,10 @@ def _build_header_map(sh: xlrd.sheet.Sheet, hdr_row: int) -> dict[str, int]:
         "Группа ABC",
         "Признаки",
         "В кор. шт/кг",
+        "Бренд",
+        "Базовая цена за короб",
+        "Срок годности, дн.",
+        "Фасовка - вес штуки, гр",
     )
     missing = [k for k in need if k not in out]
     if missing:
@@ -160,6 +164,10 @@ def parse_order_blank(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
                 "group_abc": _cell_str(sh, r, col["Группа ABC"])[:64],
                 "feature": _cell_str(sh, r, col["Признаки"])[:64],
                 "quantity_in_box": qty,
+                "brand": _cell_str(sh, r, col["Бренд"])[:128],
+                "base_price": to_decimal(sh.cell_value(r, col["Базовая цена за короб"])),
+                "shelf_life_days": to_decimal(sh.cell_value(r, col["Срок годности, дн."])),
+                "weight_gr": to_decimal(sh.cell_value(r, col["Фасовка - вес штуки, гр"])),
                 "updated_at": now,
             }
         )

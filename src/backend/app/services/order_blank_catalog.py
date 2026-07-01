@@ -46,10 +46,22 @@ async def apply_order_blank_full_sync(
         raise ValueError("articles must be non-empty")
 
     ts = now or utc_now()
+    clean_rows = []
     for row in product_rows:
-        row["updated_at"] = ts
+        clean_rows.append({
+            "article": row["article"],
+            "nom_number": row.get("nom_number"),
+            "name": row["name"],
+            "unit": row["unit"],
+            "type": row["type"],
+            "focus": row["focus"],
+            "group_abc": row["group_abc"],
+            "feature": row["feature"],
+            "quantity_in_box": row["quantity_in_box"],
+            "updated_at": ts,
+        })
 
-    stmt = pg_insert(Product).values(product_rows)
+    stmt = pg_insert(Product).values(clean_rows)
     stmt = stmt.on_conflict_do_update(
         index_elements=[Product.article],
         set_={

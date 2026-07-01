@@ -25,6 +25,5 @@ class OrderBlankUpload(Base):
         DateTime(timezone=True), nullable=True
     )
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    #: ``success`` | ``failed``
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
