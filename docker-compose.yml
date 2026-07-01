@@ -45,12 +45,15 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        # Skip login UI (pair with AUTH_ENABLED=false in src/backend/.env).
-        VITE_DISABLE_AUTH: "true"
+      dockerfile: Dockerfile.dev
     ports:
       - "8080:80"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      VITE_DISABLE_AUTH: "true"
+      VITE_PROXY_TARGET: "http://api:8000"
     depends_on:
       - api
 

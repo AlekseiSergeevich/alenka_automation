@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   flexRender,
@@ -17,10 +17,16 @@ import {
   ChevronLeft,
   PackageSearch,
   Search,
+  Check,
+  BrainCircuit,
+  FileDown,
+  CheckCircle2,
+  X,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,6 +41,7 @@ import {
 import { EmptyState } from "@/components/common/EmptyState";
 import { ErrorState } from "@/components/common/ErrorState";
 import { useStoreProductsQuery, useStoresQuery } from "@/hooks/useStores";
+import { useForecastQuery, useGenerateForecastMutation } from "@/hooks/useForecast";
 import type { AggRowDto } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
@@ -50,9 +57,10 @@ interface ProductRow {
   twoMonthsAgoQty: number | null;
   threeMonthsAgoQty: number | null;
   isAtRisk: boolean;
+  recommendedQty: number | null;
 }
 
-function buildRows(items: AggRowDto[]): ProductRow[] {
+function buildRows(items: AggRowDto[], forecastMap: Record<string, number>): ProductRow[] {
   return items.map((row) => {
     const sorted = [...row.monthly_sales].sort((a, b) =>
       a.month < b.month ? 1 : a.month > b.month ? -1 : 0,
@@ -73,6 +81,7 @@ function buildRows(items: AggRowDto[]): ProductRow[] {
       twoMonthsAgoQty: twoBack,
       threeMonthsAgoQty: threeBack,
       isAtRisk,
+      recommendedQty: forecastMap[row.article] ?? null,
     };
   });
 }
@@ -93,16 +102,47 @@ export function StorePage() {
     validStoreId,
   );
 
+  const forecastQuery = useForecastQuery(storeId, validStoreId);
+  const generateForecastMutation = useGenerateForecastMutation();
+
   const store = storesQuery.data?.find((item) => item.id === storeId) ?? null;
   const [search, setSearch] = useState("");
   const [sorting, setSorting] = useState<SortingState>([
     { id: "productName", desc: false },
   ]);
+  const [orderValues, setOrderValues] = useState<Record<string, string>>({});
+  const [approvedSkus, setApprovedSkus] = useState<Set<string>>(new Set());
+
+  const forecastMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    if (forecastQuery.data?.forecast) {
+      for (const item of forecastQuery.data.forecast) {
+        map[item.sku] = item.predicted_qty;
+      }
+    }
+    return map;
+  }, [forecastQuery.data]);
 
   const rows = useMemo(
-    () => buildRows(productsQuery.data?.items ?? []),
-    [productsQuery.data?.items],
+    () => buildRows(productsQuery.data?.items ?? [], forecastMap),
+    [productsQuery.data?.items, forecastMap],
   );
+
+  useEffect(() => {
+    if (forecastQuery.data?.forecast) {
+      setOrderValues((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        for (const item of forecastQuery.data.forecast) {
+          if (next[item.sku] === undefined && item.predicted_qty > 0) {
+            next[item.sku] = Math.ceil(item.predicted_qty).toString();
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }
+  }, [forecastQuery.data]);
 
   const columns = useMemo<ColumnDef<ProductRow>[]>(
     () => [
@@ -157,10 +197,47 @@ export function StorePage() {
         id: "recommended",
         header: "Рекомендация",
         enableSorting: false,
-        cell: () => <span className="text-muted-foreground">—</span>,
+        cell: ({ row }) => {
+          const sku = row.original.article;
+          const isApproved = approvedSkus.has(sku);
+          const val = orderValues[sku] ?? "";
+          const rec = row.original.recommendedQty;
+          
+          return (
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Input 
+                  value={val}
+                  onChange={(e) => {
+                    setOrderValues(prev => ({ ...prev, [sku]: e.target.value }));
+                    if (isApproved) {
+                      const newSet = new Set(approvedSkus);
+                      newSet.delete(sku);
+                      setApprovedSkus(newSet);
+                    }
+                  }}
+                  placeholder={rec !== null ? Math.ceil(rec).toString() : "-"}
+                  className={cn("w-20 text-right h-8 font-medium", isApproved && "border-green-500 bg-green-50 text-green-900")}
+                />
+              </div>
+              <Button 
+                size="icon" 
+                variant="ghost" 
+                className={cn("h-8 w-8", isApproved ? "text-green-600 hover:text-green-700 hover:bg-green-100" : "text-muted-foreground hover:text-foreground")}
+                onClick={() => {
+                  const newSet = new Set(approvedSkus);
+                  if (isApproved) newSet.delete(sku); else newSet.add(sku);
+                  setApprovedSkus(newSet);
+                }}
+              >
+                <CheckCircle2 className="h-5 w-5" />
+              </Button>
+            </div>
+          );
+        },
       },
     ],
-    [],
+    [orderValues, approvedSkus],
   );
 
   const table = useReactTable({
@@ -182,6 +259,24 @@ export function StorePage() {
 
   const meta = productsQuery.data?.meta;
   const atRiskCount = rows.filter((row) => row.isAtRisk).length;
+
+  const handleBulkApprove = () => {
+    if (approvedSkus.size > 0) {
+      setApprovedSkus(new Set());
+    } else {
+      const newSet = new Set(approvedSkus);
+      rows.forEach(r => {
+        if (r.recommendedQty !== null || orderValues[r.article]) {
+          newSet.add(r.article);
+        }
+      });
+      setApprovedSkus(newSet);
+    }
+  };
+
+  const handleGenerateOrder = () => {
+    alert(`Заказ сформирован\n\nУтверждено позиций: ${approvedSkus.size}. Файл готов к отправке (в разработке).`);
+  };
 
   return (
     <div className="space-y-6">
@@ -210,6 +305,42 @@ export function StorePage() {
             {atRiskCount > 0 ? (
               <Badge variant="danger">{atRiskCount} требуют внимания</Badge>
             ) : null}
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => generateForecastMutation.mutate(storeId)}
+              disabled={generateForecastMutation.isPending}
+            >
+              <BrainCircuit className="mr-2 h-4 w-4 text-purple-500" />
+              {generateForecastMutation.isPending ? "Генерация..." : "ML Прогноз"}
+            </Button>
+            <Button 
+              variant={approvedSkus.size > 0 ? "destructive" : "primary"}
+              size="sm"
+              onClick={handleBulkApprove}
+            >
+              {approvedSkus.size > 0 ? (
+                <>
+                  <X className="mr-2 h-4 w-4" />
+                  Отменить все
+                </>
+              ) : (
+                <>
+                  <Check className="mr-2 h-4 w-4" />
+                  Принять все
+                </>
+              )}
+            </Button>
+            <Button 
+              variant="primary" 
+              size="sm"
+              className="bg-green-600 hover:bg-green-700 text-white"
+              onClick={handleGenerateOrder}
+              disabled={approvedSkus.size === 0}
+            >
+              <FileDown className="mr-2 h-4 w-4" />
+              Сформировать заказ
+            </Button>
           </div>
         }
       />
@@ -275,7 +406,7 @@ export function StorePage() {
           </div>
         ) : (
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 bg-background/95 backdrop-blur z-10 shadow-sm">
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id} className="hover:bg-transparent">
                   {headerGroup.headers.map((header) => {
@@ -324,6 +455,7 @@ export function StorePage() {
                   key={row.id}
                   className={cn(
                     row.original.isAtRisk && "bg-red-50 hover:bg-red-100/70",
+                    approvedSkus.has(row.original.article) && "bg-green-50/50 hover:bg-green-100/50"
                   )}
                 >
                   {row.getVisibleCells().map((cell) => (

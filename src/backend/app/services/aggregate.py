@@ -23,8 +23,7 @@ WITH sales_monthly_buckets AS (
             jsonb_agg(
                 jsonb_build_object(
                     'month', sm.month_start,
-                    'qty', sm.qty,
-                    'orders_count', sm.orders_count
+                    'qty', sm.qty
                 )
                 ORDER BY sm.month_start
             ),

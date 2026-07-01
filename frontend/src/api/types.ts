@@ -98,3 +98,14 @@ export interface ListStoreProductsParams {
   limit?: number;
   offset?: number;
 }
+
+export interface ForecastItemDto {
+  sku: string;
+  predicted_qty: number;
+  month: string;
+}
+
+export interface ForecastResponseDto {
+  store_id: number;
+  forecast: ForecastItemDto[];
+}
