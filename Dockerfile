@@ -8,7 +8,11 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 COPY src/backend/requirements.txt /app/src/backend/requirements.txt
-RUN pip install --upgrade pip && \
+RUN apt-get update && \
+    mkdir -p /usr/share/man/man1 && \
+    apt-get install -y --no-install-recommends libreoffice && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --upgrade pip && \
     pip install -r src/backend/requirements.txt
 
 COPY alembic.ini /app/alembic.ini
