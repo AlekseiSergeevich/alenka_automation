@@ -60,9 +60,9 @@ def export_order_to_xls(template_path: str | Path, output_path: str | Path, orde
         if target_col is None:
             raise ValueError("Could not find order quantity column (Заявка, короба / Заявка, шт.)")
             
-        weight_col = col_map.get("Вес короба, кг")
-        if weight_col is None:
-            raise ValueError("Could not find column 'Вес короба, кг'")
+        capacity_col = col_map.get("В кор. шт/кг") or col_map.get("Вложение") or col_map.get("Вес короба, кг")
+        if capacity_col is None:
+            raise ValueError("Could not find column 'В кор. шт/кг' or 'Вес короба, кг'")
             
         ukp_i = col_map["УКП"]
         kod_i = col_map.get("КОД Продаж", ukp_i)
@@ -98,16 +98,16 @@ def export_order_to_xls(template_path: str | Path, output_path: str | Path, orde
             if article in order_data:
                 qty_kg = float(order_data[article])
                 if qty_kg > 0:
-                    weight_val = sh.cell(row=r, column=weight_col).value
-                    # Parse weight
-                    box_weight = 0.0
+                    capacity_val = sh.cell(row=r, column=capacity_col).value
+                    # Parse capacity
+                    box_capacity = 0.0
                     try:
-                        box_weight = float(str(weight_val).replace(",", ".").strip())
+                        box_capacity = float(str(capacity_val).replace(",", ".").strip())
                     except (ValueError, TypeError):
                         pass
                         
-                    if box_weight > 0:
-                        qty_boxes = math.ceil(qty_kg / box_weight)
+                    if box_capacity > 0:
+                        qty_boxes = math.ceil(round(qty_kg / box_capacity, 6))
                     else:
                         qty_boxes = math.ceil(qty_kg)
                         

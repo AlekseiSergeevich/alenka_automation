@@ -11,12 +11,32 @@ import { useEffect } from "react";
 
 export function App() {
   useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws/logs`);
-    ws.onmessage = (event) => {
-      console.log("%c[Backend]", "color: #ff00ff; font-weight: bold", event.data);
+    let ws: WebSocket;
+    let reconnectTimer: NodeJS.Timeout;
+
+    const connect = () => {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws/logs`);
+      
+      ws.onmessage = (event) => {
+        console.log("%c[Backend]", "color: #ff00ff; font-weight: bold", event.data);
+      };
+      
+      ws.onclose = () => {
+        // Try to reconnect after 2 seconds
+        reconnectTimer = setTimeout(connect, 2000);
+      };
     };
-    return () => ws.close();
+
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (ws) {
+        ws.onclose = null; // Prevent reconnect loop on unmount
+        ws.close();
+      }
+    };
   }, []);
 
   return (
