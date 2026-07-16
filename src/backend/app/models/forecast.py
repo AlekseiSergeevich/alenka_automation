@@ -14,6 +14,7 @@ class Forecast(Base):
     month: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     sku: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     predicted_qty: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.0)
+    recommended_qty: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.0)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

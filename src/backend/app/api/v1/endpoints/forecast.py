@@ -31,6 +31,7 @@ async def get_forecast(store_id: int, session: AsyncSession = Depends(get_db_ses
             {
                 "sku": f.sku, 
                 "predicted_qty": float(f.predicted_qty),
+                "recommended_qty": float(f.recommended_qty),
                 "month": f.month.isoformat()
             } for f in forecasts
         ]
