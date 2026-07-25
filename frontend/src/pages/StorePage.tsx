@@ -52,6 +52,7 @@ interface ProductRow {
   raw: AggRowDto;
   productName: string;
   article: string;
+  rating: string;
   stock: number;
   lastMonthQty: number | null;
   twoMonthsAgoQty: number | null;
@@ -61,27 +62,31 @@ interface ProductRow {
 }
 
 function buildRows(items: AggRowDto[], forecastMap: Record<string, number>): ProductRow[] {
+  const currentMonthStart = new Date().toISOString().substring(0, 7) + "-01";
+  
   return items.map((row) => {
-    const sorted = [...row.monthly_sales].sort((a, b) =>
+    const historicalSales = row.monthly_sales.filter((s) => s.month < currentMonthStart);
+    const sorted = [...historicalSales].sort((a, b) =>
       a.month < b.month ? 1 : a.month > b.month ? -1 : 0,
     );
     const lastMonth = sorted[0]?.qty ?? null;
     const twoBack = sorted[1]?.qty ?? null;
     const threeBack = sorted[2]?.qty ?? null;
     const stock = Number(row.stock_balance) || 0;
-    const lastMonthValue = lastMonth ?? 0;
-    const isAtRisk = lastMonthValue * HIGHLIGHT_MULTIPLIER >= stock;
+    const recommendedQty = forecastMap[row.article] ?? null;
+    const isAtRisk = recommendedQty !== null && recommendedQty > 0;
 
     return {
       raw: row,
       productName: row.product_name || row.article,
       article: row.article,
+      rating: row.rating || "",
       stock,
       lastMonthQty: lastMonth,
       twoMonthsAgoQty: twoBack,
       threeMonthsAgoQty: threeBack,
       isAtRisk,
-      recommendedQty: forecastMap[row.article] ?? null,
+      recommendedQty,
     };
   });
 }
@@ -117,7 +122,7 @@ export function StorePage() {
     const map: Record<string, number> = {};
     if (forecastQuery.data?.forecast) {
       for (const item of forecastQuery.data.forecast) {
-        map[item.sku] = item.predicted_qty;
+        map[item.sku] = item.recommended_qty;
       }
     }
     return map;
@@ -128,14 +133,26 @@ export function StorePage() {
     [productsQuery.data?.items, forecastMap],
   );
 
+  const [filterMode, setFilterMode] = useState<"all" | "recommended" | "not_recommended">("all");
+
+  const filteredRows = useMemo(() => {
+    if (filterMode === "recommended") {
+      return rows.filter(r => (r.recommendedQty !== null && r.recommendedQty > 0) || (orderValues[r.article] && orderValues[r.article] !== "0"));
+    }
+    if (filterMode === "not_recommended") {
+      return rows.filter(r => (r.recommendedQty === null || r.recommendedQty <= 0) && (!orderValues[r.article] || orderValues[r.article] === "0"));
+    }
+    return rows;
+  }, [rows, filterMode, orderValues]);
+
   useEffect(() => {
     if (forecastQuery.data?.forecast) {
       setOrderValues((prev) => {
         const next = { ...prev };
         let changed = false;
         for (const item of forecastQuery.data.forecast) {
-          if (next[item.sku] === undefined && item.predicted_qty > 0) {
-            next[item.sku] = Math.ceil(item.predicted_qty).toString();
+          if (next[item.sku] === undefined && item.recommended_qty > 0) {
+            next[item.sku] = Math.ceil(item.recommended_qty).toString();
             changed = true;
           }
         }
@@ -165,6 +182,18 @@ export function StorePage() {
           const haystack = `${row.original.productName} ${row.original.article}`.toLowerCase();
           return haystack.includes(needle);
         },
+      },
+      {
+        id: "rating",
+        accessorKey: "rating",
+        header: "Рейтинг",
+        cell: ({ row }) => (
+          row.original.rating ? (
+            <Badge variant="outline" className="text-xs whitespace-nowrap border-primary/20 text-primary">
+              {row.original.rating}
+            </Badge>
+          ) : <span className="text-muted-foreground">-</span>
+        ),
       },
       {
         id: "stock",
@@ -197,7 +226,9 @@ export function StorePage() {
         id: "recommended",
         header: "Рекомендация",
         enableSorting: false,
-        cell: ({ row }) => {
+        cell: ({ row, table }) => {
+          const meta = table.options.meta as any;
+          const { orderValues, setOrderValues, approvedSkus, setApprovedSkus } = meta;
           const sku = row.original.article;
           const isApproved = approvedSkus.has(sku);
           const val = orderValues[sku] ?? "";
@@ -207,9 +238,12 @@ export function StorePage() {
             <div className="flex items-center gap-2">
               <div className="relative">
                 <Input 
+                  type="text"
+                  inputMode="numeric"
                   value={val}
                   onChange={(e) => {
-                    setOrderValues(prev => ({ ...prev, [sku]: e.target.value }));
+                    const onlyDigits = e.target.value.replace(/\D/g, "");
+                    setOrderValues((prev: any) => ({ ...prev, [sku]: onlyDigits }));
                     if (isApproved) {
                       const newSet = new Set(approvedSkus);
                       newSet.delete(sku);
@@ -237,13 +271,14 @@ export function StorePage() {
         },
       },
     ],
-    [orderValues, approvedSkus],
+    [],
   );
 
   const table = useReactTable({
-    data: rows,
+    data: filteredRows,
     columns,
     state: { sorting, globalFilter: search },
+    meta: { orderValues, setOrderValues, approvedSkus, setApprovedSkus },
     onSortingChange: setSorting,
     onGlobalFilterChange: setSearch,
     getCoreRowModel: getCoreRowModel(),
@@ -348,7 +383,7 @@ export function StorePage() {
               disabled={generateForecastMutation.isPending}
             >
               <BrainCircuit className="mr-2 h-4 w-4 text-purple-500" />
-              {generateForecastMutation.isPending ? "Генерация..." : "ML Прогноз"}
+              {generateForecastMutation.isPending ? "Генерация..." : "Сформировать рекомендацию"}
             </Button>
             <Button 
               variant={approvedSkus.size > 0 ? "destructive" : "primary"}
@@ -393,18 +428,43 @@ export function StorePage() {
 
       <Card className="overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative w-full max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Поиск по названию или артикулу"
-              className="pl-9"
-            />
+          <div className="flex flex-col sm:flex-row gap-3 w-full">
+            <div className="relative w-full max-w-sm">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Поиск по названию или артикулу"
+                className="pl-9"
+              />
+            </div>
+            <div className="flex items-center gap-1 bg-muted/50 p-1 rounded-lg border border-border shrink-0">
+              <Button
+                variant={filterMode === "all" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setFilterMode("all")}
+                className={cn("h-8 text-xs", filterMode === "all" ? "bg-background shadow-sm" : "")}
+              >
+                Все
+              </Button>
+              <Button
+                variant={filterMode === "recommended" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setFilterMode("recommended")}
+                className={cn("h-8 text-xs", filterMode === "recommended" ? "bg-background shadow-sm" : "")}
+              >
+                Требуют пополнения
+              </Button>
+              <Button
+                variant={filterMode === "not_recommended" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setFilterMode("not_recommended")}
+                className={cn("h-8 text-xs", filterMode === "not_recommended" ? "bg-background shadow-sm" : "")}
+              >
+                Достаточный остаток
+              </Button>
+            </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Подсветка: остаток ниже порога продаж × {HIGHLIGHT_MULTIPLIER.toString()}
-          </p>
         </div>
 
         {!validStoreId ? (

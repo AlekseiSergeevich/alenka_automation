@@ -53,7 +53,7 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      VITE_DISABLE_AUTH: "true"
+      VITE_DISABLE_AUTH: "false"
       VITE_PROXY_TARGET: "http://api:8000"
     depends_on:
       - api

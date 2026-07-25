@@ -33,6 +33,7 @@ export interface AggRowDto {
   article: string;
   store_name: string;
   product_name: string;
+  rating: string;
   unit: string;
   stock_balance: number;
   stock_captured_at: string | null;

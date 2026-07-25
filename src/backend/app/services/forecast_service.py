@@ -60,7 +60,7 @@ async def generate_forecast_for_store(session: AsyncSession, store_id: int):
     # 6. Считаем прогноз и рекомендованный заказ
     # Формула: max(0, MA3 * 1.1 - текущий остаток)
     forecast_df["predicted_qty"] = forecast_df["ma3"]
-    forecast_df["recommended_qty"] = np.maximum(0.0, forecast_df["ma3"] * 1.1 - forecast_df["stock"])
+    forecast_df["recommended_qty"] = np.maximum(0.0, forecast_df["ma3"] * 1.2 - forecast_df["stock"])
 
     # 7. Определяем месяц прогноза (следующий месяц)
     if now.month == 12:

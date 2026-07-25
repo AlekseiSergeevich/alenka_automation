@@ -7,6 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.backend.app.api.deps import get_orchestrator, require_user
@@ -51,6 +52,7 @@ class AggRow(BaseModel):
     article: str
     store_name: str
     product_name: str
+    rating: str
     unit: str
     stock_balance: Decimal
     stock_captured_at: datetime | None = None
@@ -75,6 +77,7 @@ class AggRow(BaseModel):
             article=article,
             store_name=str(getattr(row, "store_name", "") or ""),
             product_name=str(getattr(row, "product_name", "") or ""),
+            rating=str(getattr(getattr(row, "product", None), "focus", "") or ""),
             unit=str(getattr(row, "unit", "") or ""),
             stock_balance=Decimal(getattr(row, "stock_balance", 0)),
             stock_captured_at=getattr(row, "stock_captured_at", None),
@@ -187,7 +190,7 @@ async def get_overview(
     freshness = await orchestrator.ensure_overview_fresh(background_tasks)
     stale = any(info.stale for info in freshness)
 
-    query = select(AggStoreProduct)
+    query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product))
     filters = [func.jsonb_array_length(AggStoreProduct.monthly_sales) > 0]
     if store_id is not None:
         filters.append(AggStoreProduct.store_id == store_id)
@@ -286,7 +289,7 @@ async def list_store_products(
 
     hint = await compute_order_blank_reminder_state(session)
 
-    query = select(AggStoreProduct).where(
+    query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product)).where(
         AggStoreProduct.store_id == store_id,
         func.jsonb_array_length(AggStoreProduct.monthly_sales) > 0
     )
@@ -342,7 +345,7 @@ async def product_across_stores(
 
     hint = await compute_order_blank_reminder_state(session)
 
-    query = select(AggStoreProduct).where(
+    query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product)).where(
         AggStoreProduct.article == article,
         func.jsonb_array_length(AggStoreProduct.monthly_sales) > 0
     )

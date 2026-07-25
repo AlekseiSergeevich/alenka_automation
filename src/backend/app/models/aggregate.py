@@ -4,7 +4,11 @@ from typing import Any
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Numeric, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.backend.app.models.product import Product
 
 from src.backend.app.db.base import Base
 
@@ -33,6 +37,13 @@ class AggStoreProduct(Base):
     store_name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     product_name: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
     unit: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    product: Mapped["Product"] = relationship(
+        "Product",
+        primaryjoin="AggStoreProduct.article == Product.article",
+        foreign_keys="[AggStoreProduct.article]",
+        uselist=False,
+    )
 
     stock_balance: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False, default=0)
     stock_captured_at: Mapped[datetime | None] = mapped_column(

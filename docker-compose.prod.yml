@@ -4,6 +4,7 @@
 services:
   frontend:
     build:
+      dockerfile: Dockerfile
       args:
         VITE_DISABLE_AUTH: "false"
 
