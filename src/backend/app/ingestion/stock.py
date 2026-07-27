@@ -204,6 +204,7 @@ async def sync_stock(
         if not items:
             break
 
+        added_on_page = 0
         for item in items:
             try:
                 entry = ProductBalanceSchema.model_validate(item)
@@ -220,6 +221,7 @@ async def sync_stock(
                 # Defensive dedup in case Saby returns duplicates across pages.
                 continue
             seen_articles.add(entry.article)
+            added_on_page += 1
             nn = (entry.nom_number or "").strip() or None
             if nn is None and is_sbis_internal_nom_code(entry.article):
                 nn = entry.article.strip()
@@ -358,6 +360,7 @@ async def sync_stock_for_existing_products(
         if not items:
             break
 
+        added_on_page = 0
         for item in items:
             try:
                 entry = ProductBalanceSchema.model_validate(item)
@@ -373,6 +376,7 @@ async def sync_stock_for_existing_products(
             if entry.article in seen_articles:
                 continue
             seen_articles.add(entry.article)
+            added_on_page += 1
             nn = (entry.nom_number or "").strip() or None
             if nn is None and is_sbis_internal_nom_code(entry.article):
                 nn = entry.article.strip()
@@ -403,7 +407,7 @@ async def sync_stock_for_existing_products(
         has_more = outcome.get("hasMore")
         if has_more is False:
             break
-        if has_more is None and len(items) == 0:
+        if not added_on_page:
             break
         page += 1
 

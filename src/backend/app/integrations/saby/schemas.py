@@ -274,6 +274,10 @@ class ProductBalanceSchema(BaseModel):
             d["article"] = ""
         if d.get("nom_number") is None:
             d["nom_number"] = ""
+        if d.get("name") is None:
+            d["name"] = ""
+        if d.get("unit") is None:
+            d["unit"] = ""
 
         d["type"] = cls._first_str(
             d,
