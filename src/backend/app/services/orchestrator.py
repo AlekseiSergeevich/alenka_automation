@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
 import zlib
@@ -34,6 +35,8 @@ catalog_safe_ingestion: ContextVar[bool] = ContextVar(
     "catalog_safe_ingestion",
     default=False,
 )
+
+_sync_semaphore = asyncio.Semaphore(2)
 
 
 class TriggerMode(str, enum.Enum):
@@ -228,7 +231,11 @@ class SyncOrchestrator:
 
     async def _safe_run(self, entity: SyncEntity, store_id: int | None) -> None:
         try:
-            await self._run_locked(entity, store_id)
+            async with _sync_semaphore:
+                info = await self.freshness(entity, store_id)
+                if not info.stale:
+                    return
+                await self._run_locked(entity, store_id)
         except Exception:
             logger.exception(
                 "Background sync failed: entity=%s store_id=%s", entity, store_id

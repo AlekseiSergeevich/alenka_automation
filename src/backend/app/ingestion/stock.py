@@ -191,14 +191,15 @@ async def sync_stock(
     product_rows: list[dict[str, Any]] = []
     stock_rows: list[dict[str, Any]] = []
 
-    page = 0
+    position = None
     while True:
         raw = await client.list_products(
             point_id=store_id,
             price_list_id=price_list_id,
             with_balance=True,
-            page=page,
             page_size=_PAGE_SIZE,
+            position=position,
+            order="after" if position is not None else None,
         )
         items = iter_nomenclature_dicts(raw)
         if not items:
@@ -254,7 +255,12 @@ async def sync_stock(
             break
         if has_more is None and len(items) == 0:
             break
-        page += 1
+            
+        last_item = items[-1]
+        next_position = last_item.get("hierarchicalId")
+        if next_position is None or next_position == position:
+            break
+        position = next_position
 
     internal_keys = sorted(
         [a.strip() for a in seen_articles if is_sbis_internal_nom_code(a)]
@@ -347,14 +353,15 @@ async def sync_stock_for_existing_products(
     product_rows: list[dict[str, Any]] = []
     stock_rows: list[dict[str, Any]] = []
 
-    page = 0
+    position = None
     while True:
         raw = await client.list_products(
             point_id=store_id,
             price_list_id=price_list_id,
             with_balance=True,
-            page=page,
             page_size=_PAGE_SIZE,
+            position=position,
+            order="after" if position is not None else None,
         )
         items = iter_nomenclature_dicts(raw)
         if not items:
@@ -407,9 +414,14 @@ async def sync_stock_for_existing_products(
         has_more = outcome.get("hasMore")
         if has_more is False:
             break
-        if not added_on_page:
+        if has_more is None and len(items) == 0:
             break
-        page += 1
+            
+        last_item = items[-1]
+        next_position = last_item.get("hierarchicalId")
+        if next_position is None or next_position == position:
+            break
+        position = next_position
 
     internal_keys = sorted(
         [a.strip() for a in seen_articles if is_sbis_internal_nom_code(a)]
