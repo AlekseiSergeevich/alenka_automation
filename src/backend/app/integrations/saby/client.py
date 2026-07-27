@@ -34,6 +34,7 @@ class SabyClient:
         self,
         point_id: int | None = None,
         price_list_id: int | None = None,
+        warehouse_id: str | None = None,
         no_stop_list: bool | None = None,
         search_string: str | None = None,
         with_balance: bool = True,
@@ -57,6 +58,8 @@ class SabyClient:
             params["pointId"] = point_id
         if price_list_id is not None:
             params["priceListId"] = price_list_id
+        if warehouse_id is not None:
+            params["warehouseId"] = warehouse_id
         if no_stop_list is not None:
             params["noStopList"] = str(no_stop_list).lower()
         if search_string is not None:
