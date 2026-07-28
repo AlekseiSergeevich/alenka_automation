@@ -26,11 +26,11 @@ export function AppShell() {
         <div className="mx-auto flex h-16 w-full max-w-screen-2xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-8">
             <Link to="/stores" className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                <span className="text-sm font-semibold">CF</span>
+              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[#f8bf30] text-black">
+                <span className="text-sm font-bold">А</span>
               </span>
               <span className="text-sm font-semibold tracking-tight">
-                Candy Forecast
+                Сладости.Экспресс
               </span>
             </Link>
             <nav className="flex flex-wrap items-center gap-1">

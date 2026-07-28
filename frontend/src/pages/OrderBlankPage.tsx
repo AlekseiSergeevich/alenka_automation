@@ -63,7 +63,7 @@ export function OrderBlankPage() {
     <div className="space-y-6">
       <PageHeader
         title="Бланк заказа"
-        description="Загрузка ежемесячного файла каталога (.xls): обновляет справочник товаров для прогноза и синхронизации."
+        description="Загрузка ежемесячного файла каталога (.xls / .xlsx): обновляет справочник товаров для прогноза и синхронизации."
       />
 
       {st?.needs_order_blank && st.warning ? (
@@ -116,7 +116,7 @@ export function OrderBlankPage() {
             Загрузить файл
           </CardTitle>
           <CardDescription>
-            Формат: .xls с листом «Бланк заказа», колонки УКП / КОД Продаж / Название SKU и др., как в
+            Формат: .xls или .xlsx с листом «Бланк заказа», колонки УКП / КОД Продаж / Название SKU и др., как в
             вашей типовой выгрузке.
           </CardDescription>
         </CardHeader>
@@ -131,7 +131,7 @@ export function OrderBlankPage() {
               <input
                 ref={fileRef}
                 type="file"
-                accept=".xls,application/vnd.ms-excel"
+                accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 className="hidden"
                 onChange={onFileChange}
               />

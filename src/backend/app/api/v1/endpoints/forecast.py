@@ -36,3 +36,15 @@ async def get_forecast(store_id: int, session: AsyncSession = Depends(get_db_ses
             } for f in forecasts
         ]
     }
+
+@router.delete("/{store_id}")
+async def clear_forecast(store_id: int, session: AsyncSession = Depends(get_db_session)):
+    """Эндпоинт для удаления прогноза (очистка рекомендаций)"""
+    from sqlalchemy import delete
+    from src.backend.app.models.forecast import Forecast
+    
+    stmt = delete(Forecast).where(Forecast.store_id == store_id)
+    await session.execute(stmt)
+    await session.commit()
+    
+    return {"store_id": store_id, "status": "success", "message": "Прогноз очищен"}

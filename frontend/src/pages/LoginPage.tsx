@@ -61,10 +61,10 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-muted/30 to-background px-4 py-12">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-2 text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <span className="text-base font-semibold">CF</span>
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[#f8bf30] text-black">
+            <span className="text-xl font-bold">А</span>
           </div>
-          <CardTitle className="text-2xl">Candy Forecast</CardTitle>
+          <CardTitle className="text-2xl">Сладости.Экспресс</CardTitle>
           <CardDescription>
             Войдите, чтобы открыть аналитику остатков и продаж
           </CardDescription>

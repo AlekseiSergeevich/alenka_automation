@@ -7,5 +7,8 @@ export const forecastApi = {
   },
   generateForecast: async (storeId: number): Promise<ForecastResponseDto> => {
     return apiRequest<ForecastResponseDto>(`api/v1/forecast/${storeId}/generate`, { method: "POST" });
+  },
+  clearForecast: async (storeId: number): Promise<void> => {
+    return apiRequest<void>(`api/v1/forecast/${storeId}`, { method: "DELETE" });
   }
 };

@@ -22,6 +22,7 @@ import {
   BrainCircuit,
   FileDown,
   X,
+  Trash2,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -41,7 +42,7 @@ import {
 import { EmptyState } from "@/components/common/EmptyState";
 import { ErrorState } from "@/components/common/ErrorState";
 import { useStoreProductsQuery, useStoresQuery } from "@/hooks/useStores";
-import { useForecastQuery, useGenerateForecastMutation } from "@/hooks/useForecast";
+import { useForecastQuery, useGenerateForecastMutation, useClearForecastMutation } from "@/hooks/useForecast";
 import type { AggRowDto } from "@/api/types";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
@@ -109,6 +110,7 @@ export function StorePage() {
 
   const forecastQuery = useForecastQuery(storeId, validStoreId);
   const generateForecastMutation = useGenerateForecastMutation();
+  const clearForecastMutation = useClearForecastMutation();
 
   const store = storesQuery.data?.find((item) => item.id === storeId) ?? null;
   const [search, setSearch] = useState("");
@@ -134,16 +136,22 @@ export function StorePage() {
   );
 
   const [filterMode, setFilterMode] = useState<"all" | "recommended" | "not_recommended">("all");
+  const [showOnlyWithHistory, setShowOnlyWithHistory] = useState(false);
 
   const filteredRows = useMemo(() => {
+    let result = rows;
+    if (showOnlyWithHistory) {
+      result = result.filter(r => r.raw.monthly_sales && r.raw.monthly_sales.length > 0);
+    }
+    
     if (filterMode === "recommended") {
-      return rows.filter(r => (r.recommendedQty !== null && r.recommendedQty > 0) || (orderValues[r.article] && orderValues[r.article] !== "0"));
+      return result.filter(r => (r.recommendedQty !== null && r.recommendedQty > 0) || (orderValues[r.article] && orderValues[r.article] !== "0"));
     }
     if (filterMode === "not_recommended") {
-      return rows.filter(r => (r.recommendedQty === null || r.recommendedQty <= 0) && (!orderValues[r.article] || orderValues[r.article] === "0"));
+      return result.filter(r => (r.recommendedQty === null || r.recommendedQty <= 0) && (!orderValues[r.article] || orderValues[r.article] === "0"));
     }
-    return rows;
-  }, [rows, filterMode, orderValues]);
+    return result;
+  }, [rows, filterMode, orderValues, showOnlyWithHistory]);
 
   useEffect(() => {
     if (forecastQuery.data?.forecast) {
@@ -375,6 +383,19 @@ export function StorePage() {
               {generateForecastMutation.isPending ? "Генерация..." : "Сформировать рекомендацию"}
             </Button>
             <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => {
+                if (window.confirm("Вы точно хотите удалить рекомендацию?")) {
+                  clearForecastMutation.mutate(storeId);
+                }
+              }}
+              disabled={clearForecastMutation.isPending || (!forecastQuery.data?.forecast?.length && !forecastQuery.isPending)}
+            >
+              <Trash2 className="mr-2 h-4 w-4 text-red-500" />
+              Очистить
+            </Button>
+            <Button 
               variant={approvedSkus.size > 0 ? "destructive" : "primary"}
               size="sm"
               onClick={handleBulkApprove}
@@ -461,6 +482,16 @@ export function StorePage() {
                 className={cn("h-8 text-xs", filterMode === "not_recommended" ? "bg-background shadow-sm" : "")}
               >
                 Достаточный остаток
+              </Button>
+            </div>
+            <div className="flex items-center gap-1 bg-muted/50 p-1 rounded-lg border border-border shrink-0">
+              <Button
+                variant={showOnlyWithHistory ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setShowOnlyWithHistory(v => !v)}
+                className={cn("h-8 text-xs", showOnlyWithHistory ? "bg-background shadow-sm text-blue-600" : "")}
+              >
+                Только с продажами
               </Button>
             </div>
           </div>

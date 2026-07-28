@@ -110,9 +110,7 @@ function StoreCard({ store }: { store: StoreSummaryDto }) {
       <Card className="flex h-full flex-col gap-3 p-5 transition-shadow hover:shadow-md">
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1">
-            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              ID #{store.id}
-            </p>
+
             <h3 className="text-base font-semibold leading-tight text-foreground">
               {store.name || "Без названия"}
             </h3>
@@ -123,9 +121,7 @@ function StoreCard({ store }: { store: StoreSummaryDto }) {
           <MapPin className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="space-y-0.5">
             <p className="text-foreground">{store.locality || "Город не указан"}</p>
-            {store.address ? (
-              <p className="text-xs leading-relaxed">{store.address}</p>
-            ) : null}
+
           </div>
         </div>
       </Card>

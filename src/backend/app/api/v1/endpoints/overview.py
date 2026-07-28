@@ -191,7 +191,7 @@ async def get_overview(
     stale = any(info.stale for info in freshness)
 
     query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product))
-    filters = [func.jsonb_array_length(AggStoreProduct.monthly_sales) > 0]
+    filters = []
     if store_id is not None:
         filters.append(AggStoreProduct.store_id == store_id)
     if stock_gt is not None:
@@ -290,8 +290,7 @@ async def list_store_products(
     hint = await compute_order_blank_reminder_state(session)
 
     query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product)).where(
-        AggStoreProduct.store_id == store_id,
-        func.jsonb_array_length(AggStoreProduct.monthly_sales) > 0
+        AggStoreProduct.store_id == store_id
     )
     total = await session.scalar(
         select(func.count()).select_from(query.order_by(None).subquery())
@@ -346,8 +345,7 @@ async def product_across_stores(
     hint = await compute_order_blank_reminder_state(session)
 
     query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product)).where(
-        AggStoreProduct.article == article,
-        func.jsonb_array_length(AggStoreProduct.monthly_sales) > 0
+        AggStoreProduct.article == article
     )
     total = await session.scalar(
         select(func.count()).select_from(query.order_by(None).subquery())

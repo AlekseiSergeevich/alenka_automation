@@ -25,3 +25,14 @@ export function useGenerateForecastMutation() {
     },
   });
 }
+
+export function useClearForecastMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (storeId: number) => forecastApi.clearForecast(storeId),
+    onSuccess: (_, storeId) => {
+      queryClient.invalidateQueries({ queryKey: forecastQueryKeys.store(storeId) });
+    },
+  });
+}

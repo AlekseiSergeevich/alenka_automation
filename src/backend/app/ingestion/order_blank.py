@@ -52,44 +52,78 @@ def find_latest_order_blank_xls(project_root: Path, name_substr: str = DEFAULT_N
     raw_dir = project_root / "data" / "raw"
     if not raw_dir.is_dir():
         return None
-    candidates = sorted(
-        (p for p in raw_dir.glob("*.xls") if name_substr in p.name),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    candidates = []
+    for ext in ("*.xls", "*.xlsx"):
+        candidates.extend(p for p in raw_dir.glob(ext) if name_substr in p.name)
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0] if candidates else None
 
 
-def _cell_str(sh: xlrd.sheet.Sheet, r: int, c: int) -> str:
-    if c < 0 or c >= sh.ncols:
-        return ""
-    v = sh.cell_value(r, c)
-    typ = sh.cell_type(r, c)
-    if typ == xlrd.XL_CELL_EMPTY:
-        return ""
-    if typ == xlrd.XL_CELL_NUMBER:
-        if isinstance(v, float) and v == int(v):
-            return str(int(v))
-        return str(v).strip()
-    return str(v).strip()
+def load_2d_grid(path: Path) -> list[list[str]]:
+    if path.suffix.lower() == ".xlsx":
+        import openpyxl
+        wb = openpyxl.load_workbook(str(path), data_only=True)
+        sh = None
+        for name in wb.sheetnames:
+            if "Бланк заказа" in name:
+                sh = wb[name]
+                break
+        if sh is None:
+            sh = wb.active
+        grid = []
+        for row in sh.iter_rows(values_only=True):
+            grid.append([str(v).strip() if v is not None else "" for v in row])
+        return grid
+    else:
+        import xlrd
+        wb = xlrd.open_workbook(str(path))
+        try:
+            sh = wb.sheet_by_name("Бланк заказа")
+        except xlrd.XLRDError:
+            sh = wb.sheet_by_index(0)
+        grid = []
+        for r in range(sh.nrows):
+            row_data = []
+            for c in range(sh.ncols):
+                v = sh.cell_value(r, c)
+                typ = sh.cell_type(r, c)
+                if typ == xlrd.XL_CELL_EMPTY:
+                    row_data.append("")
+                elif typ == xlrd.XL_CELL_NUMBER:
+                    if isinstance(v, float) and v == int(v):
+                        row_data.append(str(int(v)))
+                    else:
+                        row_data.append(str(v).strip())
+                else:
+                    row_data.append(str(v).strip())
+            grid.append(row_data)
+        return grid
 
 
-def _find_header_row(sh: xlrd.sheet.Sheet) -> int:
-    scan = min(80, sh.nrows)
+def _cell_str(grid: list[list[str]], r: int, c: int) -> str:
+    if r < 0 or r >= len(grid):
+        return ""
+    if c < 0 or c >= len(grid[r]):
+        return ""
+    return grid[r][c]
+
+
+def _find_header_row(grid: list[list[str]]) -> int:
+    scan = min(80, len(grid))
     for r in range(scan):
-        cells = {_cell_str(sh, r, c) for c in range(sh.ncols)}
+        cells = set(grid[r])
         if _EXPECTED_MARKERS <= cells:
             return r
     msg = "Не найдена строка заголовка с колонками УКП / Название SKU / КОД Продаж"
     raise ValueError(msg)
 
 
-def _build_header_map(sh: xlrd.sheet.Sheet, hdr_row: int) -> dict[str, int]:
+def _build_header_map(grid: list[list[str]], hdr_row: int) -> dict[str, int]:
     out: dict[str, int] = {}
-    for c in range(sh.ncols):
-        key = _cell_str(sh, hdr_row, c)
-        if key:
-            out[key] = c
+    row = grid[hdr_row]
+    for c, val in enumerate(row):
+        if val:
+            out[val] = c
     need = (
         "УКП",
         "КОД Продаж",
@@ -120,54 +154,50 @@ def _article_for_row(kod: str, ukp: str, ukp_counts: Counter[str]) -> str:
 
 
 def parse_order_blank(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    wb = xlrd.open_workbook(str(path))
-    try:
-        sh = wb.sheet_by_name("Бланк заказа")
-    except xlrd.XLRDError:
-        sh = wb.sheet_by_index(0)
+    grid = load_2d_grid(path)
 
-    hdr = _find_header_row(sh)
-    col = _build_header_map(sh, hdr)
+    hdr = _find_header_row(grid)
+    col = _build_header_map(grid, hdr)
 
     ukp_i = col["УКП"]
     kod_i = col["КОД Продаж"]
 
     ukp_counts: Counter[str] = Counter()
-    for r in range(hdr + 1, sh.nrows):
-        ukp = _cell_str(sh, r, ukp_i)
+    for r in range(hdr + 1, len(grid)):
+        ukp = _cell_str(grid, r, ukp_i)
         if ukp:
             ukp_counts[ukp] += 1
 
     now = datetime.now(timezone.utc)
     rows_out: list[dict[str, Any]] = []
 
-    for r in range(hdr + 1, sh.nrows):
-        ukp = _cell_str(sh, r, ukp_i)
+    for r in range(hdr + 1, len(grid)):
+        ukp = _cell_str(grid, r, ukp_i)
         if not ukp:
             continue
-        kod = _cell_str(sh, r, kod_i)
+        kod = _cell_str(grid, r, kod_i)
         article = _article_for_row(kod, ukp, ukp_counts).strip()
         if not article:
             continue
 
-        qty_raw = sh.cell_value(r, col["В кор. шт/кг"])
+        qty_raw = _cell_str(grid, r, col["В кор. шт/кг"])
         qty = to_decimal(qty_raw)
 
         rows_out.append(
             {
                 "article": article[:128],
                 "nom_number": None,
-                "name": _cell_str(sh, r, col["Название SKU"])[:1024] or article[:1024],
+                "name": _cell_str(grid, r, col["Название SKU"])[:1024] or article[:1024],
                 "unit": "",
-                "type": _cell_str(sh, r, col["Тип"])[:64],
-                "focus": _cell_str(sh, r, col["Фокус"])[:64],
-                "group_abc": _cell_str(sh, r, col["Группа ABC"])[:64],
-                "feature": _cell_str(sh, r, col["Признаки"])[:64],
+                "type": _cell_str(grid, r, col["Тип"])[:64],
+                "focus": _cell_str(grid, r, col["Фокус"])[:64],
+                "group_abc": _cell_str(grid, r, col["Группа ABC"])[:64],
+                "feature": _cell_str(grid, r, col["Признаки"])[:64],
                 "quantity_in_box": qty,
-                "brand": _cell_str(sh, r, col["Бренд"])[:128],
-                "base_price": to_decimal(sh.cell_value(r, col["Базовая цена за короб"])),
-                "shelf_life_days": to_decimal(sh.cell_value(r, col["Срок годности, дн."])),
-                "weight_gr": to_decimal(sh.cell_value(r, col["Фасовка - вес штуки, гр"])),
+                "brand": _cell_str(grid, r, col["Бренд"])[:128],
+                "base_price": to_decimal(_cell_str(grid, r, col["Базовая цена за короб"])),
+                "shelf_life_days": to_decimal(_cell_str(grid, r, col["Срок годности, дн."])),
+                "weight_gr": to_decimal(_cell_str(grid, r, col["Фасовка - вес штуки, гр"])),
                 "updated_at": now,
             }
         )

@@ -50,15 +50,13 @@ last_sales AS (
     GROUP BY sl.store_id, sl.article
 ),
 scope AS (
-    SELECT store_id, article FROM stock_current sc
+    SELECT st.id AS store_id, p.article 
+    FROM store st
+    CROSS JOIN product p
     WHERE (
         CAST(:sales_store_id AS BIGINT) IS NULL
-        OR sc.store_id = CAST(:sales_store_id AS BIGINT)
+        OR st.id = CAST(:sales_store_id AS BIGINT)
     )
-    UNION
-    SELECT store_id, article FROM sales_monthly_buckets
-    UNION
-    SELECT ls.store_id, ls.article FROM last_sales ls
 ),
 combined AS (
     SELECT
@@ -123,19 +121,8 @@ WHERE (
       OR agg.store_id = CAST(:sales_store_id AS BIGINT)
 )
   AND NOT EXISTS (
-      SELECT 1 FROM stock_current sc
-      WHERE sc.store_id = agg.store_id AND sc.article = agg.article
-  )
-  AND NOT EXISTS (
-      SELECT 1 FROM sale_line sl
-      WHERE sl.store_id = agg.store_id AND sl.article = agg.article
-        AND sl.sold_at >= :overall_from AND sl.sold_at < :overall_to_exclusive
-  )
-  AND NOT EXISTS (
-      SELECT 1 FROM sales_monthly sm
-      WHERE sm.store_id = agg.store_id AND sm.article = agg.article
-        AND sm.month_start >= :first_month AND sm.month_start <= :last_month
-        AND sm.qty > 0
+      SELECT 1 FROM product p
+      WHERE p.article = agg.article
   )
 """
 

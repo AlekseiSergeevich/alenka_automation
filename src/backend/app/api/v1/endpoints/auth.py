@@ -29,6 +29,12 @@ class LoginResponse(BaseModel):
     user: UserOut
 
 
+from datetime import datetime, timedelta
+
+_FAILED_LOGINS: dict[str, dict] = {}
+MAX_FAILED_ATTEMPTS = 10
+LOCKOUT_DURATION = timedelta(minutes=15)
+
 @router.post("/auth/login", response_model=LoginResponse)
 async def login(
     body: LoginBody,
@@ -41,12 +47,40 @@ async def login(
             detail="Authentication is disabled",
         )
 
+    u = body.username.strip()
+    now = datetime.now()
+
+    record = _FAILED_LOGINS.get(u)
+    if record and record.get("lockout_until"):
+        if now < record["lockout_until"]:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Слишком много неудачных попыток. Попробуйте позже.",
+            )
+        else:
+            _FAILED_LOGINS[u] = {"count": 0, "lockout_until": None}
+
     user = resolve_user_from_credentials(settings, body.username, body.password)
     if user is None:
+        if u not in _FAILED_LOGINS:
+            _FAILED_LOGINS[u] = {"count": 1, "lockout_until": None}
+        else:
+            _FAILED_LOGINS[u]["count"] += 1
+
+        if _FAILED_LOGINS[u]["count"] >= MAX_FAILED_ATTEMPTS:
+            _FAILED_LOGINS[u]["lockout_until"] = now + LOCKOUT_DURATION
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Слишком много неудачных попыток. Попробуйте позже.",
+            )
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
         )
+
+    if u in _FAILED_LOGINS:
+        _FAILED_LOGINS.pop(u, None)
 
     token = new_session_token(settings, user)
     max_age = settings.session_max_age_seconds
@@ -54,7 +88,6 @@ async def login(
     response.set_cookie(
         key=settings.session_cookie_name,
         value=token,
-        max_age=max_age,
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite=settings.session_cookie_samesite,

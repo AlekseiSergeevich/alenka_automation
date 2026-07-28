@@ -35,23 +35,23 @@ interface RequestOptions {
   headers?: Record<string, string>;
 }
 
-function getAccessToken(): string | null {
+export function getAccessToken(): string | null {
   try {
-    return window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
-  } catch {
+    return window.sessionStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+  } catch (e) {
     return null;
   }
 }
 
-export function setAccessToken(token: string | null): void {
+export function setAccessToken(token: string | null) {
   try {
     if (token) {
-      window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
+      window.sessionStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
     } else {
-      window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+      window.sessionStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
     }
-  } catch {
-    // localStorage unavailable; ignore
+  } catch (e) {
+    // sessionStorage unavailable; ignore
   }
 }
 

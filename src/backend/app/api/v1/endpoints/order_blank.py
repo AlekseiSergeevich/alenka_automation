@@ -126,10 +126,10 @@ async def order_blank_upload(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Filename is required",
         )
-    if not file.filename.lower().endswith(".xls"):
+    if not (file.filename.lower().endswith(".xls") or file.filename.lower().endswith(".xlsx")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only .xls files are supported",
+            detail="Only .xls and .xlsx files are supported",
         )
 
     content = await file.read()
@@ -150,7 +150,8 @@ async def order_blank_upload(
 
     ts = utc_now().strftime("%Y%m%dT%H%M%SZ")
     stub = _sanitize_stub(file.filename)
-    stored_name = f"{ts}_{digest[:16]}_{stub}.xls"
+    ext = Path(file.filename).suffix.lower()
+    stored_name = f"{ts}_{digest[:16]}_{stub}{ext}"
     abs_path = storage_root / stored_name
     abs_path.write_bytes(content)
     # Храним путь относительно корня хранилища (один каталог).
