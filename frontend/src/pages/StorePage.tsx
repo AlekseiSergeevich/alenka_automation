@@ -18,9 +18,9 @@ import {
   PackageSearch,
   Search,
   Check,
+  CheckCircle2,
   BrainCircuit,
   FileDown,
-  CheckCircle2,
   X,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -183,18 +183,7 @@ export function StorePage() {
           return haystack.includes(needle);
         },
       },
-      {
-        id: "rating",
-        accessorKey: "rating",
-        header: "Рейтинг",
-        cell: ({ row }) => (
-          row.original.rating ? (
-            <Badge variant="outline" className="text-xs whitespace-nowrap border-primary/20 text-primary">
-              {row.original.rating}
-            </Badge>
-          ) : <span className="text-muted-foreground">-</span>
-        ),
-      },
+
       {
         id: "stock",
         accessorKey: "stock",
@@ -423,6 +412,16 @@ export function StorePage() {
             {meta.stale ? "Данные обновляются" : "Внимание"}
           </AlertTitle>
           <AlertDescription>{meta.warning}</AlertDescription>
+        </Alert>
+      ) : meta?.total !== undefined && meta.total > 0 ? (
+        <Alert className="border-green-200 bg-green-50 text-green-900">
+          <AlertTitle className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-green-600" />
+            Данные загружены
+          </AlertTitle>
+          <AlertDescription>
+            Остатки актуальны. Все товары успешно загружены из СБИС.
+          </AlertDescription>
         </Alert>
       ) : null}
 

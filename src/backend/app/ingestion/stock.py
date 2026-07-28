@@ -25,12 +25,6 @@ _LOOKUP_CONCURRENCY = 10
 _MAX_INTERNAL_LOOKUPS = 500
 
 
-STORE_TO_WAREHOUSE: dict[int, str] = {
-    25042: "bbabc78e-90ee-4aa3-bb4c-0000000061d6",  # Геленджик
-    20268: "0c575ccc-a377-4611-b932-000000004f2e",  # Новороссийск
-    2116: "ec3fd08b-f01d-4c50-b031-000000000846",   # Тверь
-    170: "588ffa77-90a6-433c-8b45-0000000000ac",    # Ярославль
-}
 
 
 async def ensure_store_price_list_id(
@@ -136,7 +130,7 @@ def _apply_article_remaps(
     for row in product_rows:
         row = dict(row)
         original_article = row["article"].strip()
-        vendor_article = remap.get(original_article, original_article).strip() # type: ignore
+        vendor_article = remap.get(original_article, original_article).strip()
 
         nn_out = row.get("nom_number")
         if vendor_article != original_article:
@@ -168,7 +162,7 @@ def _apply_article_remaps(
 
     keyed: dict[tuple[int, str], dict[str, Any]] = {}
     for row in stock_rows:
-        na = remap.get(row["article"], row["article"]).strip() # type: ignore
+        na = remap.get(row["article"], row["article"]).strip()
         nr = dict(row)
         nr["article"] = na
         keyed[(int(nr["store_id"]), na)] = nr
@@ -199,21 +193,19 @@ async def sync_stock(
     product_rows: list[dict[str, Any]] = []
     stock_rows: list[dict[str, Any]] = []
 
-    position = None
+    page = 0
     while True:
         raw = await client.list_products(
             point_id=store_id,
             price_list_id=price_list_id,
             with_balance=True,
+            page=page,
             page_size=_PAGE_SIZE,
-            position=position,
-            order="after" if position is not None else None,
         )
         items = iter_nomenclature_dicts(raw)
         if not items:
             break
 
-        added_on_page = 0
         for item in items:
             try:
                 entry = ProductBalanceSchema.model_validate(item)
@@ -230,7 +222,6 @@ async def sync_stock(
                 # Defensive dedup in case Saby returns duplicates across pages.
                 continue
             seen_articles.add(entry.article)
-            added_on_page += 1
             nn = (entry.nom_number or "").strip() or None
             if nn is None and is_sbis_internal_nom_code(entry.article):
                 nn = entry.article.strip()
@@ -257,18 +248,9 @@ async def sync_stock(
                 }
             )
 
-        outcome = raw.get("outcome") or raw.get("outCome") or {}
-        has_more = outcome.get("hasMore")
-        if has_more is False:
+        if len(items) < _PAGE_SIZE:
             break
-        if has_more is None and len(items) == 0:
-            break
-            
-        last_item = items[-1]
-        next_position = last_item.get("hierarchicalId")
-        if next_position is None or next_position == position:
-            break
-        position = next_position
+        page += 1
 
     internal_keys = sorted(
         [a.strip() for a in seen_articles if is_sbis_internal_nom_code(a)]
@@ -341,6 +323,12 @@ async def sync_stock_for_existing_products(
     client: SabyClient,
     store_id: int,
 ) -> int:
+    """Обновить ``stock_current`` только для артикулов из таблицы ``product``.
+
+    Тянет номенклатуру точки как ``sync_stock``, применяет remap ``X…`` → артикул,
+    затем оставляет только SKU из каталога ``product``. Не изменяет таблицу ``product``.
+    """
+
     allowed_rows = (
         await session.execute(select(Product.article).where(Product.article.isnot(None)))
     ).all()
@@ -348,84 +336,145 @@ async def sync_stock_for_existing_products(
     if not allowed_articles:
         return 0
 
+    price_list_id = await ensure_store_price_list_id(session, client, store_id)
+
     now = datetime.now(timezone.utc)
-    filtered_stock: list[dict[str, Any]] = []
-    seen_allowed: set[str] = set()
-    
-    warehouse_id = STORE_TO_WAREHOUSE.get(store_id)
-    if warehouse_id:
-        import asyncio
-        sem = asyncio.Semaphore(3)
-        
-        async def _fetch(art: str):
-            async with sem:
-                raw = await client.list_products(
-                    point_id=store_id, warehouse_id=warehouse_id, search_string=art, page_size=10, page=0, with_balance=True
-                )
-                for item in iter_nomenclature_dicts(raw):
-                    try:
-                        entry = ProductBalanceSchema.model_validate(item)
-                        if entry.article and entry.article.strip() == art:
-                            balance = to_decimal(entry.balance) if entry.balance is not None else 0
-                            return {"store_id": store_id, "article": entry.article, "balance": balance, "captured_at": now, }
-                    except Exception:
-                        pass
-            return None
-            
-        arts = list(allowed_articles)
-        for i in range(0, len(arts), 100):
-            chunk = arts[i:i+100]
-            results = await asyncio.gather(*[_fetch(a) for a in chunk])
-            for r in results:
-                if r and r["article"] not in seen_allowed:
-                    filtered_stock.append(r)
-                    seen_allowed.add(r["article"])
-    else:
-        # Fallback to price list
-        price_list_id = await ensure_store_price_list_id(session, client, store_id)
-        position = None
+    seen_articles: set[str] = set()
+    product_rows: list[dict[str, Any]] = []
+    stock_rows: list[dict[str, Any]] = []
+
+    sem = asyncio.Semaphore(20)
+
+    async def fetch_folder(folder_id: int | None):
+        page = 0
+        found_items = []
+        found_folders = []
         while True:
-            raw = await client.list_products(
-                point_id=store_id, price_list_id=price_list_id, with_balance=True, page_size=_PAGE_SIZE, position=position, order="after" if position is not None else None
-            )
-            items = iter_nomenclature_dicts(raw)
+            params = {
+                "pointId": store_id,
+                "priceListId": price_list_id,
+                "withBalance": "true",
+                "page": page,
+                "pageSize": _PAGE_SIZE,
+            }
+            if folder_id is not None:
+                params["folder"] = folder_id
+
+            async with sem:
+                raw = await client._get("/retail/v2/nomenclature/list", params=params)
+
+            items = raw.get("nomenclatures", [])
             if not items:
                 break
-            for item in items:
-                try:
-                    entry = ProductBalanceSchema.model_validate(item)
-                    art = entry.article
-                    if art and art in allowed_articles and art not in seen_allowed:
-                        balance = to_decimal(entry.balance) if entry.balance is not None else 0
-                        filtered_stock.append({"store_id": store_id, "article": art, "balance": balance, "captured_at": now, })
-                        seen_allowed.add(art)
-                except Exception:
-                    pass
-            outcome = raw.get("outcome") or raw.get("outCome") or {}
-            if outcome.get("hasMore") is False:
-                break
-            position = raw["nomenclatures"][-1].get("hierarchicalId") if raw.get("nomenclatures") else None
 
-    # Upsert found stock
+            for item in items:
+                if not item.get("article") and item.get("hierarchicalId"):
+                    found_folders.append(item.get("hierarchicalId"))
+                else:
+                    found_items.append(item)
+
+            if len(items) < _PAGE_SIZE:
+                break
+            page += 1
+        return found_items, found_folders
+
+    folders_to_process = [None]
+    processed_folders = set()
+    all_raw_items = []
+
+    while folders_to_process:
+        tasks = []
+        for f in folders_to_process:
+            if f not in processed_folders:
+                processed_folders.add(f)
+                tasks.append(fetch_folder(f))
+
+        folders_to_process = []
+        if not tasks:
+            break
+
+        results = await asyncio.gather(*tasks)
+        for items, subfolders in results:
+            all_raw_items.extend(items)
+            folders_to_process.extend(subfolders)
+
+    for item in all_raw_items:
+        try:
+            entry = ProductBalanceSchema.model_validate(item)
+        except ValidationError:
+            continue
+        if not entry.article:
+            continue
+        if entry.article in seen_articles:
+            continue
+        seen_articles.add(entry.article)
+        nn = (entry.nom_number or "").strip() or None
+        if nn is None and is_sbis_internal_nom_code(entry.article):
+            nn = entry.article.strip()
+        product_rows.append(
+            {
+                "article": entry.article,
+                "nom_number": nn,
+                "name": entry.name or "",
+                "unit": entry.unit or "",
+                "type": entry.type or "",
+                "focus": entry.focus or "",
+                "group_abc": entry.group_abc or "",
+                "feature": entry.feature or "",
+                "quantity_in_box": entry.quantity_in_box,
+                "updated_at": now,
+            }
+        )
+        stock_rows.append(
+            {
+                "store_id": store_id,
+                "article": entry.article,
+                "balance": to_decimal(entry.balance),
+                "captured_at": now,
+            }
+        )
+
+    internal_keys = sorted(
+        [a.strip() for a in seen_articles if is_sbis_internal_nom_code(a)]
+    )
+    remap: dict[str, str] = {}
+    try:
+        remap = await _build_article_remaps(
+            client, store_id, internal_keys, price_list_id
+        )
+    except Exception:
+        pass
+    if remap:
+        _apply_article_remaps(remap, product_rows, stock_rows, seen_articles)
+
+    filtered_stock: list[dict[str, Any]] = []
+    seen_allowed: set[str] = set()
+    for row in stock_rows:
+        art = str(row["article"]).strip()
+        if art in allowed_articles:
+            filtered_stock.append(row)
+            seen_allowed.add(art)
+
     if filtered_stock:
         stmt = pg_insert(StockCurrent).values(filtered_stock)
         stmt = stmt.on_conflict_do_update(
             index_elements=[StockCurrent.store_id, StockCurrent.article],
-            set_={"balance": stmt.excluded.balance, "captured_at": stmt.excluded.captured_at},
+            set_={
+                "balance": stmt.excluded.balance,
+                "captured_at": stmt.excluded.captured_at,
+            },
         )
         await session.execute(stmt)
 
-    # Set 0 balance for stale items (NOT delete them)
-    # Because if they were missing from the warehouse, they have 0 stock!
     stale_managed = allowed_articles - seen_allowed
     if stale_managed:
-        stale_rows = [{"store_id": store_id, "article": a, "balance": 0, "captured_at": now, } for a in stale_managed]
-        for i in range(0, len(stale_rows), 500):
-            stmt = pg_insert(StockCurrent).values(stale_rows[i:i+500])
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[StockCurrent.store_id, StockCurrent.article],
-                set_={"balance": stmt.excluded.balance},
+        await session.execute(
+            delete(StockCurrent).where(
+                and_(
+                    StockCurrent.store_id == store_id,
+                    StockCurrent.article.in_(stale_managed),
+                )
             )
-            await session.execute(stmt)
+        )
 
     return len(filtered_stock)

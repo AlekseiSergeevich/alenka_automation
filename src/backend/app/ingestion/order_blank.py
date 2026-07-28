@@ -217,10 +217,14 @@ async def seed_products_from_order_blank_if_empty(
         )
 
     now = datetime.now(timezone.utc)
+    product_keys = {"article", "name", "unit", "type", "focus", "group_abc", "feature", "quantity_in_box", "nom_number", "updated_at"}
+    product_rows = []
     for row in rows:
-        row["updated_at"] = now
+        p_row = {k: v for k, v in row.items() if k in product_keys}
+        p_row["updated_at"] = now
+        product_rows.append(p_row)
 
-    stmt = pg_insert(Product).values(rows)
+    stmt = pg_insert(Product).values(product_rows)
     stmt = stmt.on_conflict_do_nothing(index_elements=[Product.article])
     await session.execute(stmt)
 

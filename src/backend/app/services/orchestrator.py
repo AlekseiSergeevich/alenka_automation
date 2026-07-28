@@ -317,12 +317,9 @@ class SyncOrchestrator:
             raise ValueError(f"{entity.value} sync requires store_id")
 
         if entity == SyncEntity.stock:
-            if catalog_safe_ingestion.get():
-                rows = await sync_stock_for_existing_products(
-                    session, self._client, store_id
-                )
-            else:
-                rows = await sync_stock(session, self._client, store_id)
+            rows = await sync_stock_for_existing_products(
+                session, self._client, store_id
+            )
             return rows, None, None
 
         if entity == SyncEntity.sales:
@@ -330,16 +327,13 @@ class SyncOrchestrator:
                 self._settings.sales_months_back,
                 datetime.now(timezone.utc),
             )
-            if catalog_safe_ingestion.get():
-                rows = await sync_sales(
-                    session,
-                    self._client,
-                    store_id,
-                    slices,
-                    restrict_to_existing_products=True,
-                )
-            else:
-                rows = await sync_sales(session, self._client, store_id, slices)
+            rows = await sync_sales(
+                session,
+                self._client,
+                store_id,
+                slices,
+                restrict_to_existing_products=True,
+            )
             if not slices:
                 return rows, None, None
             return rows, slices[0].start, slices[-1].end_exclusive
