@@ -21,15 +21,11 @@ import os
 from logging.handlers import RotatingFileHandler
 
 def configure_logging(level: str) -> None:
+    log_level = getattr(logging, level.upper(), logging.INFO)
     root = logging.getLogger()
-    if root.handlers:
-        root.setLevel(getattr(logging, level.upper(), logging.INFO))
-        return
+    root.setLevel(log_level)
 
     log_formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(log_formatter)
 
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
@@ -38,10 +34,15 @@ def configure_logging(level: str) -> None:
     )
     file_handler.setFormatter(log_formatter)
 
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        handlers=[console_handler, file_handler],
-    )
+    # Always add the file handler so we get file logs alongside Docker's console logs
+    if not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
+        root.addHandler(file_handler)
+
+    # If no handlers exist at all, add a basic console handler
+    if not root.handlers:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(log_formatter)
+        root.addHandler(console_handler)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):

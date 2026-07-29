@@ -466,6 +466,23 @@ async def sync_stock_for_existing_products(
         )
         await session.execute(stmt)
 
+    filtered_products: list[dict[str, Any]] = []
+    for row in product_rows:
+        art = str(row["article"]).strip()
+        if art in allowed_articles:
+            filtered_products.append(row)
+
+    if filtered_products:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert_product
+        stmt_prod = pg_insert_product(Product).values(filtered_products)
+        stmt_prod = stmt_prod.on_conflict_do_update(
+            index_elements=[Product.article],
+            set_={
+                "nom_number": func.coalesce(stmt_prod.excluded.nom_number, Product.nom_number)
+            },
+        )
+        await session.execute(stmt_prod)
+
     stale_managed = allowed_articles - seen_allowed
     if stale_managed:
         await session.execute(

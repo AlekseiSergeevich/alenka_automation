@@ -1,4 +1,5 @@
 import logging
+logging.basicConfig(level=logging.INFO)
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any
@@ -189,74 +190,92 @@ async def _sync_sales_window(
     product_rows: dict[str, dict[str, Any]] = {}
     sale_rows: list[dict[str, Any]] = []
 
+    import asyncio
     page = 0
-    while True:
-        raw = await client.list_sales(
-            from_datetime=from_datetime,
-            to_datetime=to_datetime,
-            point_id=store_id,
-            page=page,
-            page_size=_PAGE_SIZE,
-        )
-        orders = iter_order_dicts(raw)
-        if not orders:
-            break
+    concurrency = 10
+    finished = False
 
-        for order in orders:
-            try:
-                ord_payload = RetailOrderPayload.model_validate(order)
-            except ValidationError:
-                logger.warning(
-                    "Skipping order with invalid payload for store %s", store_id
-                )
-                continue
-            order_sold_at = (
-                _parse_order_datetime_payload(ord_payload) or from_datetime
+    while not finished:
+        tasks = [
+            client.list_sales(
+                from_datetime=from_datetime,
+                to_datetime=to_datetime,
+                point_id=store_id,
+                page=p,
+                page_size=_PAGE_SIZE,
             )
-            order_id = _stringify(ord_payload.id or ord_payload.orderId or ord_payload.uuid)
-            lines = _validated_lines_from_payload(ord_payload)
-            for line_no, line in enumerate(lines, start=1):
-                raw_key = (line.article or "").strip()
-                if not raw_key:
-                    continue
-                article = resolver.get(raw_key, raw_key)
-                if allowed_articles is not None and article not in allowed_articles:
-                    continue
-                name = line.name or ""
-                unit_val = line.unit or ""
-                qty = to_decimal(line.count)
-                if line.is_return is True:
-                    qty = -abs(qty)
-                if upsert_products:
-                    product_rows.setdefault(
-                        article,
-                        {
-                            "article": article,
-                            "name": name,
-                            "unit": unit_val,
-                            "updated_at": shared_now,
-                            "nom_number": None,
-                        },
-                    )
-                sale_rows.append(
-                    {
-                        "store_id": store_id,
-                        "article": article,
-                        "sold_at": order_sold_at,
-                        "qty": qty,
-                        "unit": unit_val,
-                        "external_order_id": order_id,
-                        "line_no": line_no,
-                    }
-                )
+            for p in range(page, page + concurrency)
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for raw in results:
+            if isinstance(raw, Exception):
+                raise raw
+                
+            orders = iter_order_dicts(raw)
+            if not orders:
+                finished = True
+                break
 
-        outcome = raw.get("outcome") or raw.get("outCome") or {}
-        has_more = outcome.get("hasMore")
-        if has_more is False:
-            break
-        if has_more is None and len(orders) == 0:
-            break
-        page += 1
+            for order in orders:
+                try:
+                    ord_payload = RetailOrderPayload.model_validate(order)
+                except ValidationError:
+                    logger.warning(
+                        "Skipping order with invalid payload for store %s", store_id
+                    )
+                    continue
+                order_sold_at = (
+                    _parse_order_datetime_payload(ord_payload) or from_datetime
+                )
+                order_id = _stringify(ord_payload.id or ord_payload.orderId or ord_payload.uuid)
+                lines = _validated_lines_from_payload(ord_payload)
+                for line_no, line in enumerate(lines, start=1):
+                    raw_key = (line.article or "").strip()
+                    if not raw_key:
+                        continue
+                    article = resolver.get(raw_key, raw_key)
+                    if allowed_articles is not None and article not in allowed_articles:
+                        continue
+                    name = line.name or ""
+                    unit_val = line.unit or ""
+                    qty = to_decimal(line.count)
+                    if line.is_return is True:
+                        qty = -abs(qty)
+                    if upsert_products:
+                        product_rows.setdefault(
+                            article,
+                            {
+                                "article": article,
+                                "name": name,
+                                "unit": unit_val,
+                                "updated_at": shared_now,
+                                "nom_number": None,
+                            },
+                        )
+                    sale_rows.append(
+                        {
+                            "store_id": store_id,
+                            "article": article,
+                            "sold_at": order_sold_at,
+                            "qty": qty,
+                            "unit": unit_val,
+                            "external_order_id": order_id,
+                            "line_no": line_no,
+                        }
+                    )
+
+            outcome = raw.get("outcome") or raw.get("outCome") or {}
+            has_more = outcome.get("hasMore")
+            if has_more is False:
+                finished = True
+                break
+            if has_more is None and len(orders) == 0:
+                finished = True
+                break
+                
+        page += concurrency
 
     if upsert_products and product_rows:
         stmt = pg_insert(Product).values(list(product_rows.values()))
