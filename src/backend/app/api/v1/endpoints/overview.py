@@ -265,7 +265,7 @@ async def list_store_products(
     background_tasks: BackgroundTasks,
     sort: SortField = Query(default="days_of_cover"),
     direction: Literal["asc", "desc"] = Query(default="asc"),
-    limit: int = Query(default=200, ge=1, le=2000),
+    limit: int = Query(default=200, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
     orchestrator: SyncOrchestrator = Depends(get_orchestrator),

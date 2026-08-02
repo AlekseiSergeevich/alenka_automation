@@ -103,7 +103,7 @@ export function StorePage() {
       storeId,
       sort: "product_name",
       direction: "asc",
-      limit: 1000,
+      limit: 5000,
     },
     validStoreId,
   );
