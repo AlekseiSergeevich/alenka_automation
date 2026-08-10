@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -8,3 +9,19 @@ __pycache__/
 data/
 tmp/
 .jupyter/
+logs/
+
+# frontend (scoped paths — same coverage as frontend/.gitignore)
+frontend/node_modules/
+frontend/dist
+frontend/dist-ssr
+*.local
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

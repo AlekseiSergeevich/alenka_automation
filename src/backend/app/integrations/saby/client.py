@@ -17,6 +17,7 @@ class SabyClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._cached_token: str | None = settings.saby_access_token
 
     async def list_sales_points(
         self,
@@ -33,6 +34,7 @@ class SabyClient:
         self,
         point_id: int | None = None,
         price_list_id: int | None = None,
+        warehouse_id: str | None = None,
         no_stop_list: bool | None = None,
         search_string: str | None = None,
         with_balance: bool = True,
@@ -56,6 +58,8 @@ class SabyClient:
             params["pointId"] = point_id
         if price_list_id is not None:
             params["priceListId"] = price_list_id
+        if warehouse_id is not None:
+            params["warehouseId"] = warehouse_id
         if no_stop_list is not None:
             params["noStopList"] = str(no_stop_list).lower()
         if search_string is not None:
@@ -109,18 +113,17 @@ class SabyClient:
 
     async def price_list(
         self,
-        pointId : int,
-        actualDate : datetime,
+        point_id: int,
+        actual_date: datetime,
         page: int = 0,
-        pageSize: int = 100,
+        page_size: int = 100,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "page": page,
-            "pageSize": pageSize,
+            "pageSize": page_size,
+            "pointId": point_id,
+            "actualDate": actual_date.strftime("%Y-%m-%d"),
         }
-        params["pointId"] = pointId
-        params["actualDate"] = actualDate.strftime("%Y-%m-%d")
-        
         return await self._get("/retail/nomenclature/price-list", params=params)
 
 
@@ -165,6 +168,12 @@ class SabyClient:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(service_url, json=body, headers=headers)
 
+            if response.status_code == status.HTTP_401_UNAUTHORIZED:
+                self._cached_token = None
+                token = await self._get_access_token()
+                headers["X-SBISAccessToken"] = token
+                response = await client.post(service_url, json=body, headers=headers)
+
         if response.is_error:
             raise HTTPException(
                 status_code=response.status_code,
@@ -199,6 +208,12 @@ class SabyClient:
         ) as client:
             response = await client.get(path, params=params, headers=headers)
 
+            if response.status_code == status.HTTP_401_UNAUTHORIZED:
+                self._cached_token = None
+                token = await self._get_access_token()
+                headers["X-SBISAccessToken"] = token
+                response = await client.get(path, params=params, headers=headers)
+
         if response.is_error:
             raise HTTPException(
                 status_code=response.status_code,
@@ -210,8 +225,8 @@ class SabyClient:
         return response.json()
 
     async def _get_access_token(self) -> str:
-        if self._settings.saby_access_token:
-            return self._settings.saby_access_token
+        if self._cached_token:
+            return self._cached_token
 
         if not (
             self._settings.saby_app_client_id
@@ -231,6 +246,7 @@ class SabyClient:
             "app_secret": self._settings.saby_app_secret,
             "secret_key": self._settings.saby_secret_key,
         }
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(self._settings.saby_auth_url, json=payload)
 
@@ -245,9 +261,14 @@ class SabyClient:
 
         data = response.json()
         token = data.get("token") or data.get("access_token")
+        
         if not token:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Saby authorization response does not contain token.",
             )
-        return str(token)
+            
+        # 3. Сохраняем полученный токен в наш кэш!
+        self._cached_token = str(token)
+        
+        return self._cached_token

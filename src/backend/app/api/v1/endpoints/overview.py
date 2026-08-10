@@ -1,18 +1,50 @@
-from datetime import datetime
+from __future__ import annotations
+
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.orm import joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.backend.app.api.deps import get_orchestrator
+from src.backend.app.api.deps import get_orchestrator, require_user
 from src.backend.app.db.session import get_session
 from src.backend.app.models import AggStoreProduct, Store
 from src.backend.app.services import SyncOrchestrator
+from src.backend.app.services.order_blank_catalog import compute_order_blank_reminder_state
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_user)])
+
+
+class MonthlySalesBucket(BaseModel):
+    month: date
+    qty: Decimal
+    orders_count: int = 0
+
+    model_config = ConfigDict(extra="ignore")
+
+    @field_validator("qty", mode="before")
+    @classmethod
+    def _coerce_qty(cls, v: Decimal | float | int | str) -> Decimal:
+        if isinstance(v, Decimal):
+            return v
+        return Decimal(str(v))
+
+    @field_validator("month", mode="before")
+    @classmethod
+    def _parse_month(cls, v: date | datetime | str) -> date:
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        if isinstance(v, str):
+            head = v[:10].strip()
+            y, mo, d = head.split("-", 2)
+            return date(int(y), int(mo), int(d))
+        raise TypeError("month field must be a date-compatible value")
 
 
 class AggRow(BaseModel):
@@ -20,18 +52,46 @@ class AggRow(BaseModel):
     article: str
     store_name: str
     product_name: str
+    rating: str
     unit: str
     stock_balance: Decimal
     stock_captured_at: datetime | None = None
-    sales_qty_30d: Decimal
-    sales_qty_90d: Decimal
-    sales_qty_window: Decimal
+    monthly_sales: list[MonthlySalesBucket]
+    sales_qty_3m: Decimal
     avg_daily_qty: Decimal
     last_sale_at: datetime | None = None
     days_of_cover: Decimal | None = None
     refreshed_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=False)
+
+    @classmethod
+    def from_agg(cls, row: AggStoreProduct) -> AggRow:
+        raw_monthly = getattr(row, "monthly_sales", None) or []
+        buckets = [MonthlySalesBucket.model_validate(item) for item in raw_monthly]
+
+        store_id = int(getattr(row, "store_id"))
+        article = str(getattr(row, "article"))
+        return cls(
+            store_id=store_id,
+            article=article,
+            store_name=str(getattr(row, "store_name", "") or ""),
+            product_name=str(getattr(row, "product_name", "") or ""),
+            rating=str(getattr(getattr(row, "product", None), "focus", "") or ""),
+            unit=str(getattr(row, "unit", "") or ""),
+            stock_balance=Decimal(getattr(row, "stock_balance", 0)),
+            stock_captured_at=getattr(row, "stock_captured_at", None),
+            monthly_sales=buckets,
+            sales_qty_3m=Decimal(getattr(row, "sales_qty_3m", 0)),
+            avg_daily_qty=Decimal(getattr(row, "avg_daily_qty", 0)),
+            last_sale_at=getattr(row, "last_sale_at", None),
+            days_of_cover=(
+                Decimal(getattr(row, "days_of_cover"))
+                if getattr(row, "days_of_cover", None) is not None
+                else None
+            ),
+            refreshed_at=getattr(row, "refreshed_at"),
+        )
 
 
 class OverviewMeta(BaseModel):
@@ -40,6 +100,11 @@ class OverviewMeta(BaseModel):
     offset: int
     stale: bool
     warning: str | None = None
+    #: Пустой каталог или не загружен бланок в текущем месяце.
+    needs_order_blank: bool = False
+    catalog_empty: bool = False
+    needs_monthly_upload: bool = False
+    last_order_blank_applied_at: datetime | None = None
 
 
 class OverviewResponse(BaseModel):
@@ -52,13 +117,40 @@ SortField = Literal[
     "article",
     "product_name",
     "stock_balance",
-    "sales_qty_30d",
-    "sales_qty_90d",
-    "sales_qty_window",
+    "sales_qty_3m",
     "avg_daily_qty",
     "days_of_cover",
     "last_sale_at",
 ]
+
+
+_STALE_BG_WARNING = (
+    "Данные обновляются в фоне — обновите страницу через минуту, "
+    "чтобы получить актуальные значения."
+)
+_EMPTY_CATALOG_WARNING = (
+    "Справочник товаров пуст; загрузите бланк заказа (.xls), чтобы включить "
+    "синхронизацию остатков и продаж."
+)
+_MONTHLY_UPLOAD_WARNING = (
+    "В текущем месяце ещё не загружен актуальный бланк заказа (.xls). "
+    "Загрузите файл, чтобы обновить каталог."
+)
+
+
+def _overview_warning_meta(
+    *,
+    stale: bool,
+    catalog_empty: bool,
+    needs_monthly_upload: bool,
+) -> str | None:
+    if stale:
+        return _STALE_BG_WARNING
+    if catalog_empty:
+        return _EMPTY_CATALOG_WARNING
+    if needs_monthly_upload:
+        return _MONTHLY_UPLOAD_WARNING
+    return None
 
 
 _SORT_COLUMNS = {
@@ -66,9 +158,7 @@ _SORT_COLUMNS = {
     "article": AggStoreProduct.article,
     "product_name": AggStoreProduct.product_name,
     "stock_balance": AggStoreProduct.stock_balance,
-    "sales_qty_30d": AggStoreProduct.sales_qty_30d,
-    "sales_qty_90d": AggStoreProduct.sales_qty_90d,
-    "sales_qty_window": AggStoreProduct.sales_qty_window,
+    "sales_qty_3m": AggStoreProduct.sales_qty_3m,
     "avg_daily_qty": AggStoreProduct.avg_daily_qty,
     "days_of_cover": AggStoreProduct.days_of_cover,
     "last_sale_at": AggStoreProduct.last_sale_at,
@@ -89,17 +179,18 @@ async def get_overview(
     session: AsyncSession = Depends(get_session),
     orchestrator: SyncOrchestrator = Depends(get_orchestrator),
 ) -> OverviewResponse:
-    """Main user-facing table: store x product with stock + sales rollups.
+    """Основная таблица: магазин × товар, остатки и продажи по месяцам.
 
-    Triggers a background refresh of stale entities for all known stores but
-    always serves the currently persisted snapshot. When nothing is persisted
-    yet, the response is empty and `meta.stale=true`.
+    Lazy refresh: при непустом каталоге ``product`` и устаревших TTL вызывается
+    ``ensure_overview_fresh`` — фоновые задачи подтягивают точки/склад/продажи
+    в catalog-safe режиме (без расширения справочника товаров из Saby).
     """
 
+    hint = await compute_order_blank_reminder_state(session)
     freshness = await orchestrator.ensure_overview_fresh(background_tasks)
     stale = any(info.stale for info in freshness)
 
-    query = select(AggStoreProduct)
+    query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product))
     filters = []
     if store_id is not None:
         filters.append(AggStoreProduct.store_id == store_id)
@@ -128,19 +219,26 @@ async def get_overview(
 
     rows = (await session.execute(query)).scalars().all()
 
+    warn = _overview_warning_meta(
+        stale=stale,
+        catalog_empty=hint.catalog_empty,
+        needs_monthly_upload=hint.needs_monthly_upload,
+    )
+    needs_attention = hint.needs_order_blank_attention
+
     return OverviewResponse(
         meta=OverviewMeta(
             total=int(total),
             limit=limit,
             offset=offset,
             stale=stale,
-            warning=(
-                "Data is being refreshed in the background; retry shortly for fresh values."
-                if stale
-                else None
-            ),
+            needs_order_blank=needs_attention,
+            catalog_empty=hint.catalog_empty,
+            needs_monthly_upload=hint.needs_monthly_upload,
+            last_order_blank_applied_at=hint.last_success_applied_at,
+            warning=warn,
         ),
-        items=[AggRow.model_validate(row) for row in rows],
+        items=[AggRow.from_agg(row) for row in rows],
     )
 
 
@@ -167,7 +265,7 @@ async def list_store_products(
     background_tasks: BackgroundTasks,
     sort: SortField = Query(default="days_of_cover"),
     direction: Literal["asc", "desc"] = Query(default="asc"),
-    limit: int = Query(default=200, ge=1, le=2000),
+    limit: int = Query(default=200, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
     orchestrator: SyncOrchestrator = Depends(get_orchestrator),
@@ -180,15 +278,20 @@ async def list_store_products(
             status_code=status.HTTP_404_NOT_FOUND, detail="Store not found"
         )
 
-    stock_info = await orchestrator.ensure_fresh(
-        entity=_entity("stock"), store_id=store_id, background_tasks=background_tasks
-    )
-    sales_info = await orchestrator.ensure_fresh(
-        entity=_entity("sales"), store_id=store_id, background_tasks=background_tasks
-    )
+    async with orchestrator.catalog_safe_overview_context():
+        stock_info = await orchestrator.ensure_fresh(
+            entity=_entity("stock"), store_id=store_id, background_tasks=background_tasks
+        )
+        sales_info = await orchestrator.ensure_fresh(
+            entity=_entity("sales"), store_id=store_id, background_tasks=background_tasks
+        )
     stale = stock_info.stale or sales_info.stale
 
-    query = select(AggStoreProduct).where(AggStoreProduct.store_id == store_id)
+    hint = await compute_order_blank_reminder_state(session)
+
+    query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product)).where(
+        AggStoreProduct.store_id == store_id
+    )
     total = await session.scalar(
         select(func.count()).select_from(query.order_by(None).subquery())
     ) or 0
@@ -202,19 +305,25 @@ async def list_store_products(
         )
     ).scalars().all()
 
+    warn = _overview_warning_meta(
+        stale=stale,
+        catalog_empty=hint.catalog_empty,
+        needs_monthly_upload=hint.needs_monthly_upload,
+    )
+
     return OverviewResponse(
         meta=OverviewMeta(
             total=int(total),
             limit=limit,
             offset=offset,
             stale=stale,
-            warning=(
-                "Data is being refreshed in the background; retry shortly for fresh values."
-                if stale
-                else None
-            ),
+            warning=warn,
+            needs_order_blank=hint.needs_order_blank_attention,
+            catalog_empty=hint.catalog_empty,
+            needs_monthly_upload=hint.needs_monthly_upload,
+            last_order_blank_applied_at=hint.last_success_applied_at,
         ),
-        items=[AggRow.model_validate(row) for row in rows],
+        items=[AggRow.from_agg(row) for row in rows],
     )
 
 
@@ -229,10 +338,15 @@ async def product_across_stores(
 ) -> OverviewResponse:
     """Cross-store view of a single article."""
 
-    freshness = await orchestrator.ensure_overview_fresh(background_tasks)
+    async with orchestrator.catalog_safe_overview_context():
+        freshness = await orchestrator.ensure_overview_fresh(background_tasks)
     stale = any(info.stale for info in freshness)
 
-    query = select(AggStoreProduct).where(AggStoreProduct.article == article)
+    hint = await compute_order_blank_reminder_state(session)
+
+    query = select(AggStoreProduct).options(joinedload(AggStoreProduct.product)).where(
+        AggStoreProduct.article == article
+    )
     total = await session.scalar(
         select(func.count()).select_from(query.order_by(None).subquery())
     ) or 0
@@ -242,24 +356,29 @@ async def product_across_stores(
         )
     ).scalars().all()
 
+    warn = _overview_warning_meta(
+        stale=stale,
+        catalog_empty=hint.catalog_empty,
+        needs_monthly_upload=hint.needs_monthly_upload,
+    )
+
     return OverviewResponse(
         meta=OverviewMeta(
             total=int(total),
             limit=limit,
             offset=offset,
             stale=stale,
-            warning=(
-                "Data is being refreshed in the background; retry shortly for fresh values."
-                if stale
-                else None
-            ),
+            warning=warn,
+            needs_order_blank=hint.needs_order_blank_attention,
+            catalog_empty=hint.catalog_empty,
+            needs_monthly_upload=hint.needs_monthly_upload,
+            last_order_blank_applied_at=hint.last_success_applied_at,
         ),
-        items=[AggRow.model_validate(row) for row in rows],
+        items=[AggRow.from_agg(row) for row in rows],
     )
 
 
 def _entity(name: str):
-    # Imported lazily to avoid module-level coupling for a single function.
     from src.backend.app.models import SyncEntity
 
     return SyncEntity(name)

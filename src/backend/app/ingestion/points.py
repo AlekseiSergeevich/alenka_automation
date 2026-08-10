@@ -1,19 +1,57 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.backend.app.ingestion.utils import extract_items
 from src.backend.app.integrations.saby.client import SabyClient
-from src.backend.app.integrations.saby.schemas import PointSchema
+from src.backend.app.integrations.saby.schemas import (
+    PointSchema,
+    first_price_list_id,
+    iter_sales_point_dicts,
+)
 from src.backend.app.models import Store
 
 logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 200
+_PRICE_LIST_CONCURRENCY = 8
+
+
+async def _fetch_first_price_list_id(client: SabyClient, point_id: int) -> int | None:
+    try:
+        raw = await client.price_list(
+            point_id=point_id,
+            actual_date=datetime.now(timezone.utc),
+            page=0,
+            page_size=100,
+        )
+        return first_price_list_id(raw)
+    except Exception:
+        logger.warning(
+            "Не удалось получить price-list для точки %s; price_list_id останется пустым",
+            point_id,
+            exc_info=True,
+        )
+        return None
+
+
+async def _attach_price_list_ids(client: SabyClient, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    sem = asyncio.Semaphore(_PRICE_LIST_CONCURRENCY)
+
+    async def _one(row: dict[str, Any]) -> None:
+        pid = row["id"]
+        async with sem:
+            plid = await _fetch_first_price_list_id(client, int(pid))
+        row["price_list_id"] = plid
+
+    await asyncio.gather(*(_one(r) for r in rows))
 
 
 async def sync_points(session: AsyncSession, client: SabyClient) -> int:
@@ -26,11 +64,12 @@ async def sync_points(session: AsyncSession, client: SabyClient) -> int:
     page = 0
     while True:
         raw = await client.list_sales_points(page=page, page_size=_PAGE_SIZE)
-        items = extract_items(raw)
+        items = iter_sales_point_dicts(raw)
         if not items:
             break
 
         batch = _build_rows(items)
+        await _attach_price_list_ids(client, batch)
         if batch:
             stmt = pg_insert(Store).values(batch)
             stmt = stmt.on_conflict_do_update(
@@ -39,7 +78,10 @@ async def sync_points(session: AsyncSession, client: SabyClient) -> int:
                     "name": stmt.excluded.name,
                     "address": stmt.excluded.address,
                     "locality": stmt.excluded.locality,
-                    "prices": stmt.excluded.prices,
+                    "warehouse_id": stmt.excluded.warehouse_id,
+                    "price_list_id": func.coalesce(
+                        stmt.excluded.price_list_id, Store.price_list_id
+                    ),
                     "raw": stmt.excluded.raw,
                     "updated_at": datetime.now(timezone.utc),
                 },
@@ -47,12 +89,20 @@ async def sync_points(session: AsyncSession, client: SabyClient) -> int:
             await session.execute(stmt)
             total += len(batch)
 
-        if len(items) < _PAGE_SIZE:
+        outcome = raw.get("outcome") or raw.get("outCome") or {}
+        has_more = outcome.get("hasMore")
+        if has_more is False:
+            break
+        if has_more is None and len(items) == 0:
             break
         page += 1
 
     return total
 
+
+# Укажите здесь ID магазинов, которые вы хотите получать (остальные будут игнорироваться)
+# Пример: ALLOWED_STORE_IDS = {12345, 67890}
+ALLOWED_STORE_IDS = {170, 2116, 20268, 25042}
 
 def _build_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc)
@@ -63,13 +113,19 @@ def _build_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         except ValidationError:
             logger.warning("Skipping point with invalid payload: %s", item.get("id"))
             continue
+            
+        # Если список задан и id магазина не в нем — пропускаем
+        if ALLOWED_STORE_IDS and point.id not in ALLOWED_STORE_IDS:
+            continue
+            
         rows.append(
             {
                 "id": point.id,
                 "name": point.name,
                 "address": point.address or "",
                 "locality": point.locality or "",
-                "prices": list(point.prices or []),
+                "warehouse_id": point.warehouse_id,
+                "price_list_id": None,
                 "raw": item,
                 "first_seen_at": now,
                 "updated_at": now,

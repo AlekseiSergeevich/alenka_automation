@@ -2,3 +2,5 @@
 -r src/backend/requirements.txt
 pytest>=8,<9
 pytest-asyncio>=0.24,<1
+# scripts/sync_products_from_order_blank.py — чтение .xls (Excel 97–2003)
+xlrd>=2.0,<3

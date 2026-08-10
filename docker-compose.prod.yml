@@ -1,0 +1,20 @@
+# Production-oriented Compose overlay: no hot-reload, no source bind mount.
+# Usage from repo root:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+services:
+  frontend:
+    build:
+      dockerfile: Dockerfile
+      args:
+        VITE_DISABLE_AUTH: "false"
+
+  api:
+    environment:
+      UVICORN_RELOAD: "0"
+      APP_DEBUG: "false"
+      ENABLE_SABY_DEBUG_API: "false"
+    volumes:
+      - order_blank_uploads:/app/data/order_blanks
+
+volumes:
+  order_blank_uploads:
