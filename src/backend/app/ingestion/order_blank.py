@@ -50,11 +50,18 @@ def project_root_from_here() -> Path:
 
 def find_latest_order_blank_xls(project_root: Path, name_substr: str = DEFAULT_NAME_SUBSTR) -> Path | None:
     raw_dir = project_root / "data" / "raw"
-    if not raw_dir.is_dir():
-        return None
+    order_blanks_dir = project_root / "data" / "order_blanks"
+    
     candidates = []
-    for ext in ("*.xls", "*.xlsx"):
-        candidates.extend(p for p in raw_dir.glob(ext) if name_substr in p.name)
+    
+    if raw_dir.is_dir():
+        for ext in ("*.xls", "*.xlsx"):
+            candidates.extend(p for p in raw_dir.glob(ext) if name_substr in p.name)
+            
+    if order_blanks_dir.is_dir():
+        for ext in ("*.xls", "*.xlsx"):
+            candidates.extend(order_blanks_dir.glob(ext))
+            
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0] if candidates else None
 
